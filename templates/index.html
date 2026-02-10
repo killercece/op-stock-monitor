@@ -1,0 +1,190 @@
+{% extends "base.html" %}
+
+{% block head %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+{% endblock %}
+
+{% block content %}
+<!-- Sidebar -->
+<aside class="sidebar" id="sidebar">
+    <div class="sidebar-header">
+        <div class="sidebar-logo">
+            <svg viewBox="0 0 40 40" width="36" height="36">
+                <defs><linearGradient id="lg" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" style="stop-color:#667eea"/><stop offset="100%" style="stop-color:#764ba2"/></linearGradient></defs>
+                <rect width="40" height="40" rx="10" fill="url(#lg)"/>
+                <text x="20" y="18" font-size="10" font-weight="700" fill="white" text-anchor="middle" font-family="sans-serif">OP</text>
+                <text x="20" y="28" font-size="6" font-weight="600" fill="rgba(255,255,255,0.85)" text-anchor="middle" font-family="sans-serif">STOCK</text>
+            </svg>
+            <div>
+                <h1>OP Stock</h1>
+                <span class="sidebar-subtitle">Monitor</span>
+            </div>
+        </div>
+    </div>
+
+    <nav class="sidebar-nav">
+        <a href="/" class="nav-link active">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
+            Dashboard
+        </a>
+    </nav>
+
+    <div class="sidebar-stats" id="sidebar-stats">
+        <div class="sidebar-stat">
+            <span class="stat-label">Produits</span>
+            <span class="stat-value" id="stat-total">-</span>
+        </div>
+        <div class="sidebar-stat">
+            <span class="stat-label">En stock</span>
+            <span class="stat-value text-success" id="stat-stock">-</span>
+        </div>
+        <div class="sidebar-stat">
+            <span class="stat-label">Sites</span>
+            <span class="stat-value" id="stat-sites">-</span>
+        </div>
+        <div class="sidebar-stat">
+            <span class="stat-label">Meilleur prix</span>
+            <span class="stat-value text-primary" id="stat-best">-</span>
+        </div>
+    </div>
+
+    <div class="sidebar-footer">
+        <div class="sidebar-bottom-row">
+            <button onclick="toggleTheme()" class="sidebar-btn" title="Changer le theme">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12.79A9 9 0 1111.21 3a7 7 0 009.79 9.79z"/></svg>
+            </button>
+            <span class="sidebar-version">v{{ version }}</span>
+        </div>
+    </div>
+</aside>
+
+<!-- Mobile header -->
+<header class="mobile-header" id="mobile-header">
+    <button class="hamburger" onclick="toggleSidebar()">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
+    </button>
+    <h1>OP Stock Monitor</h1>
+    <button onclick="toggleTheme()" class="sidebar-btn" title="Theme">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12.79A9 9 0 1111.21 3a7 7 0 009.79 9.79z"/></svg>
+    </button>
+</header>
+
+<!-- Main content -->
+<main class="main">
+    <!-- Stats cards -->
+    <div class="stats-bar" id="stats-bar">
+        <div class="stat-card">
+            <div class="stat-card-icon bg-primary-light">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--primary)" stroke-width="2"><path d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4M4 7l8 4M4 7v10l8 4m0-10v10"/></svg>
+            </div>
+            <div class="stat-card-info">
+                <span class="stat-card-value" id="card-total">-</span>
+                <span class="stat-card-label">Produits suivis</span>
+            </div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-card-icon bg-success-light">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--success)" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>
+            </div>
+            <div class="stat-card-info">
+                <span class="stat-card-value text-success" id="card-stock">-</span>
+                <span class="stat-card-label">En stock</span>
+            </div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-card-icon bg-danger-light">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--danger)" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+            </div>
+            <div class="stat-card-info">
+                <span class="stat-card-value text-danger" id="card-oos">-</span>
+                <span class="stat-card-label">Rupture</span>
+            </div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-card-icon bg-warning-light">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--warning)" stroke-width="2"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 000 7h5a3.5 3.5 0 010 7H6"/></svg>
+            </div>
+            <div class="stat-card-info">
+                <span class="stat-card-value text-warning" id="card-avg">-</span>
+                <span class="stat-card-label">Prix moyen</span>
+            </div>
+        </div>
+    </div>
+
+    <!-- Toolbar -->
+    <div class="toolbar">
+        <div class="toolbar-filters">
+            <div class="filter-group">
+                <select id="filter-site" onchange="applyFilters()">
+                    <option value="">Tous les sites</option>
+                </select>
+            </div>
+            <div class="filter-group">
+                <select id="filter-set" onchange="applyFilters()">
+                    <option value="">Tous les sets</option>
+                </select>
+            </div>
+            <div class="filter-group">
+                <select id="filter-stock" onchange="applyFilters()">
+                    <option value="">Tous</option>
+                    <option value="1">En stock</option>
+                    <option value="0">Rupture</option>
+                </select>
+            </div>
+            <div class="filter-group">
+                <select id="filter-sort" onchange="applyFilters()">
+                    <option value="price_asc">Prix croissant</option>
+                    <option value="price_desc">Prix decroissant</option>
+                    <option value="name">Nom A-Z</option>
+                    <option value="recent">Plus recent</option>
+                </select>
+            </div>
+            <div class="filter-group search-group">
+                <svg class="search-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+                <input type="text" id="filter-search" placeholder="Rechercher..." oninput="debounceSearch()">
+            </div>
+        </div>
+        <div class="toolbar-actions">
+            <span class="scan-info" id="scan-info">-</span>
+            <button class="btn btn-primary" id="btn-scan" onclick="triggerScan()">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 11-2.12-9.36L23 10"/></svg>
+                Scanner
+            </button>
+        </div>
+    </div>
+
+    <!-- Product count -->
+    <div class="results-info" id="results-info"></div>
+
+    <!-- Product grid -->
+    <div class="product-grid" id="product-grid">
+        <div class="empty-state" id="empty-state">
+            <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="var(--text-light)" stroke-width="1.5"><path d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4M4 7l8 4M4 7v10l8 4m0-10v10"/></svg>
+            <h3>Aucun produit</h3>
+            <p>Lancez un scan pour commencer la surveillance des sites.</p>
+            <button class="btn btn-primary" onclick="triggerScan()">Lancer le premier scan</button>
+        </div>
+    </div>
+</main>
+
+<!-- Price History Modal -->
+<div class="modal-overlay" id="modal-overlay" onclick="hideModal()">
+    <div class="modal" onclick="event.stopPropagation()">
+        <div class="modal-header">
+            <div>
+                <h2 id="modal-title">Historique des prix</h2>
+                <span class="modal-subtitle" id="modal-subtitle"></span>
+            </div>
+            <button class="btn-icon" onclick="hideModal()" title="Fermer">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+            </button>
+        </div>
+        <div class="modal-body">
+            <div class="chart-container">
+                <canvas id="price-chart"></canvas>
+            </div>
+            <div class="history-table-wrapper" id="history-table-wrapper"></div>
+        </div>
+    </div>
+</div>
+{% endblock %}
