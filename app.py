@@ -1340,6 +1340,17 @@ def api_stats():
             ) WHERE ph.in_stock = 1 AND ph.price IS NOT NULL
         """).fetchone()['v']
 
+        # Recuperer le dernier scan depuis la BDD (fiable multi-worker)
+        scan_row = db.execute(
+            "SELECT started_at, finished_at FROM scan_log "
+            "ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+        scan_info = {
+            'finished_at': scan_row['finished_at'] if scan_row else None,
+            'started_at': scan_row['started_at'] if scan_row else None,
+            'running': last_scan_info['running'],
+        }
+
         return jsonify({
             "total_products": total,
             "in_stock": in_stock,
@@ -1347,7 +1358,7 @@ def api_stats():
             "total_sites": total_sites,
             "avg_price": round(avg_price, 2) if avg_price else None,
             "best_price": best_price,
-            "last_scan": last_scan_info,
+            "last_scan": scan_info,
         }), 200
 
     except sqlite3.Error as e:
@@ -1376,8 +1387,30 @@ def api_trigger_scan():
 
 @app.route('/api/scan/status')
 def api_scan_status():
-    """Statut du dernier scan."""
-    return jsonify(last_scan_info), 200
+    """Statut du dernier scan (combine etat memoire + BDD pour multi-worker)."""
+    if last_scan_info['running']:
+        return jsonify(last_scan_info), 200
+
+    # Si pas de scan en cours dans ce worker, verifier la BDD
+    # (le scan a pu tourner sur un autre worker gunicorn)
+    info = dict(last_scan_info)
+    try:
+        db = get_db()
+        row = db.execute(
+            "SELECT started_at, finished_at, results FROM scan_log "
+            "ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+        if row and row['finished_at']:
+            info['finished_at'] = row['finished_at']
+            info['started_at'] = row['started_at']
+            try:
+                info['results'] = json.loads(row['results']) if row['results'] else {}
+            except (json.JSONDecodeError, TypeError):
+                info['results'] = {}
+    except Exception:
+        pass
+
+    return jsonify(info), 200
 
 
 _SSE_MAX_CLIENTS = 4
