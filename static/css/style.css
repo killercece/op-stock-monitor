@@ -347,14 +347,19 @@ a:hover { text-decoration: underline; }
 }
 
 .scan-info {
-    font-size: 11px;
-    color: var(--text-light);
+    font-size: 12px;
+    color: var(--text);
     white-space: nowrap;
+    padding: 6px 12px;
+    background: var(--bg);
+    border-radius: 8px;
+    font-weight: 500;
 }
 
 .scanning .scan-info {
     color: var(--primary);
     font-weight: 600;
+    background: var(--primary-light);
 }
 
 /* ============================================================
