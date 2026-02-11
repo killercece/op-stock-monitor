@@ -1,8 +1,8 @@
 /* ============================================================
-   OP Stock Monitor - Frontend JavaScript
+   OP Stock Monitor - Frontend JavaScript (v1.2 - Vue groupee)
    ============================================================ */
 
-let products = [];
+let groups = [];
 let chartInstance = null;
 let searchTimeout = null;
 let scanPollInterval = null;
@@ -15,7 +15,7 @@ document.addEventListener('DOMContentLoaded', init);
 
 async function init() {
     initTheme();
-    await Promise.all([loadSites(), loadSets(), loadStats()]);
+    await Promise.all([loadSets(), loadStats()]);
     await loadProducts();
     pollScanStatus();
 }
@@ -25,15 +25,15 @@ async function init() {
    ------------------------------------------------------------ */
 
 function initTheme() {
-    const saved = localStorage.getItem('theme');
+    var saved = localStorage.getItem('theme');
     if (saved === 'dark') {
         document.documentElement.setAttribute('data-theme', 'dark');
     }
 }
 
 function toggleTheme() {
-    const current = document.documentElement.getAttribute('data-theme');
-    const next = current === 'dark' ? 'light' : 'dark';
+    var current = document.documentElement.getAttribute('data-theme');
+    var next = current === 'dark' ? 'light' : 'dark';
     if (next === 'dark') {
         document.documentElement.setAttribute('data-theme', 'dark');
     } else {
@@ -55,23 +55,19 @@ function toggleSidebar() {
    ------------------------------------------------------------ */
 
 async function loadProducts() {
-    const params = new URLSearchParams();
-    const site = document.getElementById('filter-site').value;
-    const set = document.getElementById('filter-set').value;
-    const stock = document.getElementById('filter-stock').value;
-    const sort = document.getElementById('filter-sort').value;
-    const search = document.getElementById('filter-search').value;
+    var params = new URLSearchParams();
+    var set = document.getElementById('filter-set').value;
+    var stock = document.getElementById('filter-stock').value;
+    var search = document.getElementById('filter-search').value;
 
-    if (site) params.set('site', site);
     if (set) params.set('set', set);
     if (stock) params.set('in_stock', stock);
-    if (sort) params.set('sort', sort);
     if (search) params.set('search', search);
 
     try {
-        const resp = await fetch('/api/products?' + params.toString());
-        products = await resp.json();
-        renderProducts(products);
+        var resp = await fetch('/api/products/grouped?' + params.toString());
+        groups = await resp.json();
+        renderGroups(groups);
     } catch (e) {
         console.error('Erreur chargement produits:', e);
     }
@@ -79,37 +75,21 @@ async function loadProducts() {
 
 async function loadStats() {
     try {
-        const resp = await fetch('/api/stats');
-        const stats = await resp.json();
+        var resp = await fetch('/api/stats');
+        var stats = await resp.json();
         renderStats(stats);
     } catch (e) {
         console.error('Erreur chargement stats:', e);
     }
 }
 
-async function loadSites() {
-    try {
-        const resp = await fetch('/api/sites');
-        const sites = await resp.json();
-        const select = document.getElementById('filter-site');
-        sites.forEach(function(s) {
-            const opt = document.createElement('option');
-            opt.value = s.slug;
-            opt.textContent = s.name;
-            select.appendChild(opt);
-        });
-    } catch (e) {
-        console.error('Erreur chargement sites:', e);
-    }
-}
-
 async function loadSets() {
     try {
-        const resp = await fetch('/api/sets');
-        const sets = await resp.json();
-        const select = document.getElementById('filter-set');
+        var resp = await fetch('/api/sets');
+        var sets = await resp.json();
+        var select = document.getElementById('filter-set');
         sets.forEach(function(s) {
-            const opt = document.createElement('option');
+            var opt = document.createElement('option');
             opt.value = s;
             opt.textContent = s;
             select.appendChild(opt);
@@ -140,9 +120,8 @@ function renderStats(stats) {
     }
 }
 
-function renderProducts(list) {
+function renderGroups(list) {
     var grid = document.getElementById('product-grid');
-    var empty = document.getElementById('empty-state');
     var info = document.getElementById('results-info');
 
     grid.innerHTML = '';
@@ -153,56 +132,85 @@ function renderProducts(list) {
         return;
     }
 
-    info.textContent = list.length + ' produit' + (list.length > 1 ? 's' : '') + ' trouv\u00e9' + (list.length > 1 ? 's' : '');
+    var totalShops = 0;
+    list.forEach(function(g) { totalShops += g.shops.length; });
+    info.textContent = list.length + ' set' + (list.length > 1 ? 's' : '') +
+        ' \u2014 ' + totalShops + ' offre' + (totalShops > 1 ? 's' : '');
 
-    list.forEach(function(p) {
-        grid.appendChild(createProductCard(p));
+    list.forEach(function(g) {
+        grid.appendChild(createGroupCard(g));
     });
 }
 
-function createProductCard(p) {
+function createGroupCard(g) {
     var card = document.createElement('div');
-    card.className = 'product-card';
+    card.className = 'group-card';
 
-    var inStock = p.in_stock === 1;
-    var hasPrice = p.price !== null && p.price !== undefined;
-    var setCode = p.set_code || '';
+    var hasImage = g.image_url && g.image_url.length > 5;
+    var stockClass = g.any_in_stock ? 'badge-stock' : 'badge-oos';
+    var stockText = g.any_in_stock ? '\u25CF Disponible' : '\u25CF Rupture';
+    var bestPriceHtml = g.best_price
+        ? formatPrice(g.best_price)
+        : '<span class="no-price">-</span>';
 
-    var priceHtml;
-    if (hasPrice) {
-        var whole = Math.floor(p.price);
-        var cents = (p.price % 1).toFixed(2).substring(1);
-        priceHtml = '<span class="product-price">' + whole + '<span class="currency">' + cents + ' \u20ac</span></span>';
-    } else {
-        priceHtml = '<span class="product-price no-price">Prix inconnu</span>';
-    }
-
-    var lastSeen = p.checked_at ? formatTime(new Date(p.checked_at)) : '';
-
-    card.innerHTML =
-        '<div class="card-top">' +
-            '<div class="card-badges">' +
-                (setCode ? '<span class="badge badge-set">' + escapeHtml(setCode) + '</span>' : '') +
-                '<span class="badge badge-site">' + escapeHtml(p.site_name || '') + '</span>' +
-                (inStock
-                    ? '<span class="badge badge-stock">\u25CF En stock</span>'
-                    : '<span class="badge badge-oos">\u25CF Rupture</span>') +
+    // Header : image + infos
+    var headerHtml =
+        '<div class="group-header">' +
+            (hasImage
+                ? '<div class="group-image"><img src="' + escapeHtml(g.image_url) + '" alt="" loading="lazy"></div>'
+                : '<div class="group-image group-image-placeholder"><svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="var(--text-light)" stroke-width="1.5"><path d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4M4 7l8 4M4 7v10l8 4m0-10v10"/></svg></div>') +
+            '<div class="group-info">' +
+                '<span class="badge badge-set">' + escapeHtml(g.set_code) + '</span>' +
+                '<h3 class="group-name">' + escapeHtml(g.name) + '</h3>' +
+                '<div class="group-meta">' +
+                    '<span class="badge ' + stockClass + '">' + stockText + '</span>' +
+                    '<span class="group-best-price">Meilleur prix : ' + bestPriceHtml + '</span>' +
+                '</div>' +
             '</div>' +
-        '</div>' +
-        '<div class="card-body">' +
-            '<div class="product-name">' + escapeHtml(p.name) + '</div>' +
-            '<div class="product-price-row">' +
-                priceHtml +
-                (lastSeen ? '<span class="product-last-seen">' + lastSeen + '</span>' : '') +
-            '</div>' +
-        '</div>' +
-        '<div class="card-toolbar">' +
-            '<a href="' + escapeHtml(p.url) + '" target="_blank" rel="noopener" class="btn btn-ghost btn-sm">Voir le site</a>' +
-            '<span class="toolbar-sep"></span>' +
-            '<button class="btn btn-ghost btn-sm" onclick="showHistory(' + p.id + ')">Historique</button>' +
         '</div>';
 
+    // Tableau des boutiques
+    var shopRows = '';
+    g.shops.forEach(function(s) {
+        var priceText = s.price ? s.price.toFixed(2) + ' \u20ac' : '-';
+        var stockBadge = s.in_stock
+            ? '<span class="badge badge-stock badge-sm">\u25CF En stock</span>'
+            : '<span class="badge badge-oos badge-sm">\u25CF Rupture</span>';
+        var isBest = s.price && g.best_price && s.price === g.best_price && s.in_stock;
+
+        shopRows +=
+            '<tr class="' + (s.in_stock ? '' : 'shop-oos') + '">' +
+                '<td class="shop-name">' + escapeHtml(s.site_name) + '</td>' +
+                '<td class="shop-price' + (isBest ? ' best-price' : '') + '">' + priceText + '</td>' +
+                '<td>' + stockBadge + '</td>' +
+                '<td class="shop-actions">' +
+                    '<a href="' + escapeHtml(s.url) + '" target="_blank" rel="noopener" class="btn btn-ghost btn-xs">Voir</a>' +
+                    '<button class="btn btn-ghost btn-xs" onclick="showHistory(' + s.product_id + ')">Historique</button>' +
+                '</td>' +
+            '</tr>';
+    });
+
+    var tableHtml =
+        '<div class="shop-table-wrapper">' +
+            '<table class="shop-table">' +
+                '<thead><tr>' +
+                    '<th>Boutique</th>' +
+                    '<th>Prix</th>' +
+                    '<th>Stock</th>' +
+                    '<th></th>' +
+                '</tr></thead>' +
+                '<tbody>' + shopRows + '</tbody>' +
+            '</table>' +
+        '</div>';
+
+    card.innerHTML = headerHtml + tableHtml;
     return card;
+}
+
+function formatPrice(price) {
+    var whole = Math.floor(price);
+    var cents = (price % 1).toFixed(2).substring(1);
+    return '<span class="price-value">' + whole + '<span class="price-cents">' + cents + ' \u20ac</span></span>';
 }
 
 function createEmptyState() {

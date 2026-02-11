@@ -50,7 +50,7 @@ INITIAL_SITES = [
         'slug': 'ultrajeux',
         'url': 'https://www.ultrajeux.com',
         'search_urls': json.dumps([
-            'https://www.ultrajeux.com/jeu-1031-one-piece-card-game.html',
+            'https://www.ultrajeux.com/cat-0-1031-469-one-piece-card-game-boite-de-boosters-francais.html',
         ]),
         'enabled': 1,
     },
@@ -143,6 +143,11 @@ def init_database():
             """INSERT OR IGNORE INTO sites (name, slug, url, search_urls, enabled)
                VALUES (?, ?, ?, ?, ?)""",
             (site['name'], site['slug'], site['url'], site['search_urls'], site['enabled'])
+        )
+        # Mettre a jour les URLs de recherche si elles ont change
+        cursor.execute(
+            "UPDATE sites SET search_urls = ?, url = ? WHERE slug = ?",
+            (site['search_urls'], site['url'], site['slug'])
         )
 
     conn.commit()

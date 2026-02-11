@@ -4,7 +4,7 @@ Surveillance de stock et prix de displays One Piece TCG
 sur les principaux sites e-commerce francais.
 """
 
-__version__ = '1.1.0'
+__version__ = '1.3.0'
 
 from flask import Flask, render_template, jsonify, request, g
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -145,17 +145,24 @@ def detect_set_code(name):
 
 
 def is_french_display(name):
-    """Verifie si le produit est un display en francais."""
+    """Verifie si le produit est un display unique en francais (pas case, pas bundle)."""
     name_lower = name.lower()
     if 'display' not in name_lower and 'boite de 24' not in name_lower:
         return False
-    excluded = ['(en)', '(eng)', '(jap)', '(jpn)', '- en', '- eng',
-                '- jap', '- jpn', ' en ', ' eng ', ' jap ', ' jpn ',
-                'english', 'japanese', 'japonais', 'anglais']
-    for ex in excluded:
+    # Exclure les langues non-francaises
+    lang_excluded = ['(en)', '(eng)', '(jap)', '(jpn)', '- en', '- eng',
+                     '- jap', '- jpn', ' en ', ' eng ', ' jap ', ' jpn ',
+                     'english', 'japanese', 'japonais', 'anglais']
+    for ex in lang_excluded:
         if ex in name_lower:
             return False
     if name_lower.endswith(' en') or name_lower.endswith(' jpn'):
+        return False
+    # Exclure les cases de displays (cartons de 10/12 displays)
+    if 'case de' in name_lower or 'case -' in name_lower:
+        return False
+    # Exclure les bundles (display + autre produit)
+    if 'bundle' in name_lower or ' + ' in name_lower:
         return False
     return True
 
@@ -633,67 +640,76 @@ def scrape_philibert(url):
 
 
 def scrape_ultrajeux(url):
-    """Scraper pour UltraJeux (site custom, peu de classes CSS)."""
+    """Scraper pour UltraJeux (site custom sans classes CSS structurees).
+
+    La page liste les produits de facon lineaire sans conteneur par produit.
+    Chaque produit est une sequence : image-link, texte-link, prix, disponibilite.
+    On parcourt les liens texte vers 'produit-*' et on lit les freres suivants
+    pour trouver le prix et la disponibilite.
+    """
     products = []
     html = fetch_page(url)
     if not html:
         return products
 
     soup = BeautifulSoup(html, 'html.parser')
-
     seen_urls = set()
 
     for link_el in soup.select('a[href*="produit-"]'):
         try:
-            href = link_el.get('href', '')
-            if not href or 'produit-' not in href:
+            name = link_el.get_text(strip=True)
+            if not name or len(name) < 5:
                 continue
 
+            href = link_el.get('href', '')
             full_url = href if href.startswith('http') else f"https://www.ultrajeux.com/{href.lstrip('/')}"
 
             if full_url in seen_urls:
                 continue
+            seen_urls.add(full_url)
 
-            name = link_el.get_text(strip=True)
-            if not name or len(name) < 5:
-                name = link_el.get('title', '')
-            if not name or len(name) < 5:
-                img = link_el.select_one('img')
-                if img:
-                    name = img.get('alt', '')
-            if not name or len(name) < 5:
-                continue
-
-            container = link_el.parent
-            for _ in range(4):
-                if container and container.parent:
-                    container = container.parent
-
-            container_text = container.get_text(' ', strip=True) if container else ''
-
+            # Chercher le prix et le stock dans les elements freres suivants
             price = None
-            price_match = re.search(r'(\d+[,\.]\d{2})\s*\u20ac', container_text)
+            in_stock = None
+
+            sibling = link_el.next_sibling
+            siblings_text = ''
+            for _ in range(8):
+                if sibling is None:
+                    break
+                if hasattr(sibling, 'get_text'):
+                    siblings_text += ' ' + sibling.get_text(' ', strip=True)
+                elif isinstance(sibling, str):
+                    siblings_text += ' ' + sibling.strip()
+                sibling = sibling.next_sibling if hasattr(sibling, 'next_sibling') else None
+
+            price_match = re.search(r'(\d+[,\.]\d{2})\s*\u20ac', siblings_text)
             if price_match:
                 price = parse_price(price_match.group(0))
 
-            container_lower = container_text.lower()
-            if 'indisponible' in container_lower:
+            siblings_lower = siblings_text.lower()
+            if 'indisponible' in siblings_lower:
                 in_stock = False
-            elif 'disponible' in container_lower:
+            elif 'disponible' in siblings_lower:
                 in_stock = True
             else:
                 in_stock = price is not None
 
-            img_el = link_el.select_one('img')
-            if not img_el and container:
-                img_el = container.select_one('img')
+            # Image : le lien precedent frere devrait etre le lien image
             image = ''
-            if img_el:
-                image = img_el.get('data-src', img_el.get('src', ''))
-                if image and not image.startswith('http'):
-                    image = f"https://www.ultrajeux.com/{image.lstrip('/')}"
+            prev = link_el.previous_sibling
+            for _ in range(4):
+                if prev is None:
+                    break
+                if hasattr(prev, 'select_one'):
+                    img_el = prev.select_one('img')
+                    if img_el:
+                        image = img_el.get('data-src', img_el.get('src', ''))
+                        if image and not image.startswith('http'):
+                            image = f"https://www.ultrajeux.com/{image.lstrip('/')}"
+                        break
+                prev = prev.previous_sibling if hasattr(prev, 'previous_sibling') else None
 
-            seen_urls.add(full_url)
             products.append({
                 'name': name, 'price': price, 'in_stock': in_stock,
                 'url': full_url, 'image_url': image, 'set_code': detect_set_code(name),
@@ -919,6 +935,100 @@ def api_products():
 
     except sqlite3.Error as e:
         logger.error(f"Erreur DB produits: {e}")
+        return jsonify({"error": "Erreur base de donnees"}), 500
+
+
+@app.route('/api/products/grouped')
+def api_products_grouped():
+    """Produits regroupes par set_code avec comparaison des boutiques."""
+    try:
+        db = get_db()
+        set_filter = request.args.get('set', '')
+        stock_filter = request.args.get('in_stock', '')
+        search = request.args.get('search', '')
+
+        query = """
+            SELECT p.id, p.name, p.set_code, p.url, p.image_url,
+                   s.name as site_name, s.slug as site_slug,
+                   ph.price, ph.in_stock, ph.checked_at
+            FROM products p
+            JOIN sites s ON p.site_id = s.id
+            LEFT JOIN price_history ph ON ph.id = (
+                SELECT id FROM price_history
+                WHERE product_id = p.id ORDER BY checked_at DESC LIMIT 1
+            )
+            WHERE p.set_code IS NOT NULL
+        """
+        params = []
+
+        if set_filter:
+            query += " AND p.set_code = ?"
+            params.append(set_filter)
+        if stock_filter == '1':
+            query += " AND ph.in_stock = 1"
+        elif stock_filter == '0':
+            query += " AND (ph.in_stock = 0 OR ph.in_stock IS NULL)"
+        if search:
+            query += " AND p.name LIKE ?"
+            params.append(f"%{search}%")
+
+        query += " ORDER BY p.set_code, ph.price ASC"
+        rows = db.execute(query, params).fetchall()
+
+        # Regrouper par set_code
+        groups = {}
+        for row in rows:
+            r = dict(row)
+            code = r['set_code']
+            if code not in groups:
+                groups[code] = {
+                    'set_code': code,
+                    'name': '',
+                    'image_url': '',
+                    'best_price': None,
+                    'any_in_stock': False,
+                    'shops': [],
+                }
+            g = groups[code]
+
+            # Nom canonique : le plus court qui contient le set_code
+            if not g['name'] or len(r['name']) < len(g['name']):
+                g['name'] = r['name']
+
+            # Image : prendre la premiere image non-vide de bonne qualite
+            if not g['image_url'] and r['image_url']:
+                g['image_url'] = r['image_url']
+            elif r['image_url'] and 'mini/' not in r['image_url'] and 'mini/' in (g['image_url'] or ''):
+                g['image_url'] = r['image_url']
+
+            if r['in_stock']:
+                g['any_in_stock'] = True
+            if r['price'] and (g['best_price'] is None or r['price'] < g['best_price']):
+                g['best_price'] = r['price']
+
+            g['shops'].append({
+                'site_name': r['site_name'],
+                'site_slug': r['site_slug'],
+                'price': r['price'],
+                'in_stock': r['in_stock'],
+                'url': r['url'],
+                'product_id': r['id'],
+                'checked_at': r['checked_at'],
+            })
+
+        result = sorted(groups.values(), key=lambda g: g['set_code'])
+
+        # Trier les shops de chaque groupe par prix croissant
+        for g in result:
+            g['shops'].sort(key=lambda s: (
+                0 if s['in_stock'] else 1,
+                s['price'] if s['price'] else 99999,
+            ))
+
+        return jsonify(result), 200
+
+    except sqlite3.Error as e:
+        logger.error(f"Erreur DB produits groupes: {e}")
         return jsonify({"error": "Erreur base de donnees"}), 500
 
 
