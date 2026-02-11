@@ -161,10 +161,20 @@ def detect_set_code(name):
     return None
 
 
+# Sets qui n'existent PAS en francais (sortie FR a partir de OP09, EB02, PRB02)
+NON_FR_SETS = {'OP01', 'OP02', 'OP03', 'OP04', 'OP05', 'OP06', 'OP07', 'OP08',
+               'EB01', 'PRB01', 'ST01', 'ST02', 'ST03', 'ST04', 'ST05', 'ST06',
+               'ST07', 'ST08', 'ST09', 'ST10', 'ST11', 'ST12', 'ST13'}
+
+
 def is_french_display(name):
     """Verifie si le produit est un display unique en francais (pas case, pas bundle)."""
     name_lower = name.lower()
     if 'display' not in name_lower and 'boite de 24' not in name_lower and 'boite de 20' not in name_lower:
+        return False
+    # Exclure les sets qui n'existent pas en francais
+    set_code = detect_set_code(name)
+    if set_code and set_code in NON_FR_SETS:
         return False
     # Exclure les langues non-francaises
     # Note : eviter '- en' et ' en ' qui matchent le francais "en francais"
