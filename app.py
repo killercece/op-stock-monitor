@@ -962,6 +962,14 @@ def run_scan():
     })
     conn = get_standalone_db()
 
+    # Inserer un enregistrement de scan en cours (finished_at=NULL = running)
+    cursor = conn.execute(
+        "INSERT INTO scan_log (started_at, finished_at, results) VALUES (?, NULL, NULL)",
+        (last_scan_info['started_at'],)
+    )
+    scan_log_id = cursor.lastrowid
+    conn.commit()
+
     try:
         sites = conn.execute("SELECT * FROM sites WHERE enabled = 1").fetchall()
         last_scan_info['sites_total'] = len(sites)
@@ -1034,15 +1042,24 @@ def run_scan():
                 'products_found': saved,
             })
 
+        finished_at = datetime.now().isoformat()
         conn.execute(
-            "INSERT INTO scan_log (started_at, finished_at, results) VALUES (?, ?, ?)",
-            (last_scan_info['started_at'], datetime.now().isoformat(),
-             json.dumps(last_scan_info['results']))
+            "UPDATE scan_log SET finished_at = ?, results = ? WHERE id = ?",
+            (finished_at, json.dumps(last_scan_info['results']), scan_log_id)
         )
         conn.commit()
 
     except Exception as e:
         logger.error(f"Erreur scan: {e}")
+        # Marquer le scan comme termine meme en cas d'erreur
+        try:
+            conn.execute(
+                "UPDATE scan_log SET finished_at = ?, results = ? WHERE id = ?",
+                (datetime.now().isoformat(), json.dumps(last_scan_info['results']), scan_log_id)
+            )
+            conn.commit()
+        except Exception:
+            pass
     finally:
         conn.close()
         with scan_lock:
@@ -1372,13 +1389,20 @@ def api_trigger_scan():
     if last_scan_info['running']:
         return jsonify({"error": "Scan deja en cours"}), 409
 
-    if last_scan_info.get('finished_at'):
-        try:
-            last_finish = datetime.fromisoformat(last_scan_info['finished_at'])
+    # Verifier en BDD si un scan tourne sur un autre worker
+    try:
+        db = get_db()
+        row = db.execute(
+            "SELECT finished_at FROM scan_log ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+        if row and row['finished_at'] is None:
+            return jsonify({"error": "Scan deja en cours"}), 409
+        if row and row['finished_at']:
+            last_finish = datetime.fromisoformat(row['finished_at'])
             if (datetime.now() - last_finish).total_seconds() < 60:
                 return jsonify({"error": "Attendez 1 minute entre deux scans"}), 429
-        except (ValueError, TypeError):
-            pass
+    except Exception:
+        pass
 
     thread = threading.Thread(target=run_scan, daemon=True)
     thread.start()
@@ -1400,13 +1424,18 @@ def api_scan_status():
             "SELECT started_at, finished_at, results FROM scan_log "
             "ORDER BY id DESC LIMIT 1"
         ).fetchone()
-        if row and row['finished_at']:
-            info['finished_at'] = row['finished_at']
-            info['started_at'] = row['started_at']
-            try:
-                info['results'] = json.loads(row['results']) if row['results'] else {}
-            except (json.JSONDecodeError, TypeError):
-                info['results'] = {}
+        if row:
+            if row['finished_at'] is None:
+                # Scan en cours sur un autre worker
+                info['running'] = True
+                info['started_at'] = row['started_at']
+            else:
+                info['finished_at'] = row['finished_at']
+                info['started_at'] = row['started_at']
+                try:
+                    info['results'] = json.loads(row['results']) if row['results'] else {}
+                except (json.JSONDecodeError, TypeError):
+                    info['results'] = {}
     except Exception:
         pass
 
