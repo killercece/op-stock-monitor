@@ -6,6 +6,8 @@ let groups = [];
 let chartInstance = null;
 let searchTimeout = null;
 let eventSource = null;
+let pollTimer = null;
+let wasRunning = false;
 
 /* ------------------------------------------------------------
    Initialisation
@@ -18,6 +20,7 @@ async function init() {
     await Promise.all([loadSets(), loadStats()]);
     await loadProducts();
     initSSE();
+    startPolling();
 }
 
 /* ------------------------------------------------------------
@@ -325,13 +328,56 @@ function initSSE() {
     };
 }
 
+/* ------------------------------------------------------------
+   Polling fallback (detecte les scans schedules)
+   ------------------------------------------------------------ */
+
+function startPolling() {
+    if (pollTimer) clearInterval(pollTimer);
+    pollTimer = setInterval(checkScanStatus, 10000);
+}
+
+async function checkScanStatus() {
+    try {
+        var resp = await fetch('/api/scan/status');
+        var status = await resp.json();
+
+        if (status.running) {
+            setScanRunning(true);
+            if (status.sites_done && status.sites_total) {
+                setText('scan-info', 'Scan en cours... (' + status.sites_done + '/' + status.sites_total + ' sites)');
+            }
+            if (!wasRunning) {
+                showToast('Scan en cours...', 'info');
+            }
+            wasRunning = true;
+        } else {
+            if (wasRunning) {
+                setScanRunning(false);
+                showToast('Scan termine !', 'success');
+                loadProducts();
+                loadStats();
+                loadSets();
+            }
+            if (status.finished_at) {
+                updateLastScanTime(status.finished_at);
+            }
+            wasRunning = false;
+        }
+    } catch (e) {
+        /* ignorer */
+    }
+}
+
 function setScanRunning(running) {
     var btn = document.getElementById('btn-scan');
     var actions = btn.closest('.toolbar-actions');
     btn.disabled = running;
     if (running) {
         actions.classList.add('scanning');
-        setText('scan-info', 'Scan en cours...');
+        if (document.getElementById('scan-info').textContent.indexOf('Scan en cours') === -1) {
+            setText('scan-info', 'Scan en cours...');
+        }
     } else {
         actions.classList.remove('scanning');
     }

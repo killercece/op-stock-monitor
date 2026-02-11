@@ -50,6 +50,8 @@ last_scan_info = {
     'finished_at': None,
     'results': {},
     'running': False,
+    'sites_done': 0,
+    'sites_total': 0,
 }
 scan_lock = threading.Lock()
 
@@ -951,6 +953,8 @@ def run_scan():
 
     last_scan_info['started_at'] = datetime.now().isoformat()
     last_scan_info['results'] = {}
+    last_scan_info['sites_done'] = 0
+    last_scan_info['sites_total'] = 0
 
     logger.info("=== Debut du scan ===")
     broadcast_event('scan:started', {
@@ -960,6 +964,7 @@ def run_scan():
 
     try:
         sites = conn.execute("SELECT * FROM sites WHERE enabled = 1").fetchall()
+        last_scan_info['sites_total'] = len(sites)
 
         for site in sites:
             site_slug = site['slug']
@@ -1020,11 +1025,12 @@ def run_scan():
                 'status': 'ok', 'count': saved, 'total_found': len(site_products),
                 'displays_fr': len(displays),
             }
+            last_scan_info['sites_done'] = len(last_scan_info['results'])
             logger.info(f"  {site['name']}: {saved} sauvegardes ({len(displays)} displays FR / {len(site_products)} total)")
             broadcast_event('scan:progress', {
                 'site_name': site['name'],
-                'sites_done': len(last_scan_info['results']),
-                'sites_total': len(sites),
+                'sites_done': last_scan_info['sites_done'],
+                'sites_total': last_scan_info['sites_total'],
                 'products_found': saved,
             })
 
