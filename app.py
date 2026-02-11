@@ -1374,9 +1374,17 @@ def api_scan_status():
     return jsonify(last_scan_info), 200
 
 
+_SSE_MAX_CLIENTS = 4
+_SSE_MAX_LIFETIME = 300  # 5 minutes, puis le client reconnecte automatiquement
+
+
 @app.route('/api/scan/stream')
 def scan_stream():
     """Endpoint SSE pour les mises a jour de scan en temps reel."""
+    with _sse_lock:
+        if len(_sse_clients) >= _SSE_MAX_CLIENTS:
+            return jsonify({"error": "Trop de connexions SSE"}), 429
+
     client_queue = queue.Queue(maxsize=50)
     with _sse_lock:
         _sse_clients.append(client_queue)
@@ -1386,14 +1394,17 @@ def scan_stream():
         'started_at': last_scan_info.get('started_at'),
         'finished_at': last_scan_info.get('finished_at'),
     }
+    start_time = time.time()
 
     def generate():
-        """Generateur SSE avec keepalive toutes les 30s."""
+        """Generateur SSE avec keepalive et duree de vie limitee."""
+        # Padding pour forcer le flush des proxies (Cloudflare, Nginx, etc.)
+        yield ": " + " " * 2048 + "\n\n"
         yield f"event: scan:status\ndata: {json.dumps(initial)}\n\n"
         try:
-            while True:
+            while time.time() - start_time < _SSE_MAX_LIFETIME:
                 try:
-                    msg = client_queue.get(timeout=30)
+                    msg = client_queue.get(timeout=10)
                     yield f"event: {msg['event']}\ndata: {json.dumps(msg['data'])}\n\n"
                 except queue.Empty:
                     yield ": keepalive\n\n"
