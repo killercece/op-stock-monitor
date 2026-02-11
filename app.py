@@ -4,7 +4,7 @@ Surveillance de stock et prix de displays One Piece TCG
 sur les principaux sites e-commerce francais.
 """
 
-__version__ = '1.0.0'
+__version__ = '1.1.0'
 
 from flask import Flask, render_template, jsonify, request, g
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -101,10 +101,19 @@ def fetch_page(url):
 
 
 def detect_set_code(name):
-    """Detecte le code du set One Piece (OP01, OP02...) dans le nom du produit."""
+    """Detecte le code du set One Piece (OP01, EB01, ST01...) dans le nom du produit."""
     match = re.search(r'(?:OP|op)[-\s]?(\d{2})', name)
     if match:
         return f"OP{match.group(1)}"
+    match = re.search(r'(?:EB|eb)[-\s]?(\d{2})', name)
+    if match:
+        return f"EB{match.group(1)}"
+    match = re.search(r'(?:ST|st)[-\s]?(\d{2})', name)
+    if match:
+        return f"ST{match.group(1)}"
+    match = re.search(r'(?:PRB|prb)[-\s]?(\d{2})', name)
+    if match:
+        return f"PRB{match.group(1)}"
     set_names = {
         'romance dawn': 'OP01',
         'paramount war': 'OP02',
@@ -115,13 +124,37 @@ def detect_set_code(name):
         '500 years in the future': 'OP07',
         'two legends': 'OP08',
         'the four emperors': 'OP09',
+        'quatre empereurs': 'OP09',
         'royal blood': 'OP10',
+        'sang royal': 'OP10',
+        'swift as lightning': 'OP11',
+        'poings vifs': 'OP11',
+        'carrying on his will': 'OP12',
+        'heritage du maitre': 'OP12',
+        'h\u00e9ritage du ma\u00eetre': 'OP12',
+        'successeurs': 'OP13',
+        'azure sea': 'OP14',
+        'sept de la mer': 'OP14',
+        'heroines edition': 'EB03',
     }
     name_lower = name.lower()
     for set_name, code in set_names.items():
         if set_name in name_lower:
             return code
     return None
+
+
+def is_french_display(name):
+    """Verifie si le produit est un display en francais."""
+    name_lower = name.lower()
+    if 'display' not in name_lower and 'boite de 24' not in name_lower:
+        return False
+    excluded = ['(en)', '(eng)', '(jap)', '(jpn)', 'english', 'japanese',
+                'japonais', 'anglais']
+    for ex in excluded:
+        if ex in name_lower:
+            return False
+    return True
 
 
 def parse_price(price_text):
@@ -141,8 +174,62 @@ def parse_price(price_text):
 # SCRAPERS PAR SITE
 # ============================================================
 
-def scrape_pokecardex(url):
-    """Scraper pour Pokecardex."""
+def fetch_json(url):
+    """Recupere du JSON depuis une URL."""
+    headers = {
+        'User-Agent': USER_AGENT,
+        'Accept': 'application/json',
+    }
+    try:
+        response = http_requests.get(url, headers=headers, timeout=REQUEST_TIMEOUT)
+        response.raise_for_status()
+        return response.json()
+    except http_requests.RequestException as e:
+        logger.error(f"Erreur requete JSON {url}: {e}")
+        return None
+
+
+def scrape_relictcg(url):
+    """Scraper pour RelicTCG (Shopify JSON API)."""
+    products = []
+    data = fetch_json(url)
+    if not data:
+        return products
+
+    for item in data.get('products', []):
+        try:
+            name = item.get('title', '')
+            handle = item.get('handle', '')
+            variants = item.get('variants', [])
+            images = item.get('images', [])
+
+            if not variants:
+                continue
+
+            variant = variants[0]
+            price_str = variant.get('price', '0')
+            price = float(price_str) if price_str else None
+            in_stock = variant.get('available', False)
+            image_url = images[0].get('src', '') if images else ''
+            product_url = f"https://www.relictcg.com/products/{handle}"
+
+            products.append({
+                'name': name,
+                'price': price if price and price > 0 else None,
+                'in_stock': in_stock,
+                'url': product_url,
+                'image_url': image_url,
+                'set_code': detect_set_code(name),
+            })
+        except Exception as e:
+            logger.warning(f"Erreur parsing RelicTCG: {e}")
+
+    logger.info(f"RelicTCG: {len(products)} produits trouves")
+    return products
+
+
+def scrape_destocktcg(url):
+    """Scraper pour DestockTCG (site custom PHP)."""
     products = []
     html = fetch_page(url)
     if not html:
@@ -150,40 +237,207 @@ def scrape_pokecardex(url):
 
     soup = BeautifulSoup(html, 'html.parser')
 
-    for item in soup.select('.product-item, .item.product, .product-miniature, li.item'):
+    for item in soup.select('.product-card, .product-item, .product, [class*="product"]'):
         try:
-            name_el = item.select_one('.product-item-name a, .product-name a, h2 a, .name a')
-            price_el = item.select_one('.price, .product-price, span[data-price-amount]')
+            name_el = item.select_one(
+                '.product-name, .product-title, h3 a, h2 a, h3, h2'
+            )
+            price_el = item.select_one('.price, .product-price, [class*="price"]')
+            link_el = item.select_one('a[href*="/product"], a[href*="produit"]')
+            if not link_el:
+                link_el = item.select_one('a[href]')
+
             if not name_el:
                 continue
 
             name = name_el.get_text(strip=True)
-            if not any(kw in name.lower() for kw in ['one piece', 'op-', 'op0']):
+            if len(name) < 5:
                 continue
 
             price = parse_price(price_el.get_text() if price_el else '')
-            link = name_el.get('href', '')
 
-            img_el = item.select_one('img.product-image-photo, img')
-            image = img_el.get('src', '') if img_el else ''
+            link = ''
+            if link_el:
+                link = link_el.get('href', '')
+                if link and not link.startswith('http'):
+                    link = f"https://www.destocktcg.fr{link}"
 
-            stock_el = item.select_one('.stock, .availability')
-            in_stock = True
-            if stock_el:
-                stock_text = stock_el.get_text(strip=True).lower()
-                in_stock = 'rupture' not in stock_text and 'indisponible' not in stock_text
+            img_el = item.select_one('img')
+            image = ''
+            if img_el:
+                image = img_el.get('data-src', img_el.get('src', ''))
+                if image and not image.startswith('http'):
+                    image = f"https://www.destocktcg.fr{image}"
+
+            classes = ' '.join(item.get('class', []))
+            item_text = item.get_text(' ', strip=True).lower()
+            in_stock = 'rupture' not in classes and 'rupture' not in item_text
 
             products.append({
                 'name': name, 'price': price, 'in_stock': in_stock,
                 'url': link, 'image_url': image, 'set_code': detect_set_code(name),
             })
         except Exception as e:
-            logger.warning(f"Erreur parsing Pokecardex: {e}")
+            logger.warning(f"Erreur parsing DestockTCG: {e}")
+
+    logger.info(f"DestockTCG: {len(products)} produits trouves")
+    return products
+
+
+def scrape_woocommerce(url, base_url):
+    """Scraper generique pour sites WooCommerce (Coin des Barons, Guizette Family)."""
+    products = []
+    html = fetch_page(url)
+    if not html:
+        return products
+
+    soup = BeautifulSoup(html, 'html.parser')
+
+    for item in soup.select(
+        'li.product, .product-item, .type-product, '
+        '.products .product, ul.products > li'
+    ):
+        try:
+            name_el = item.select_one(
+                '.woocommerce-loop-product__title, h2, h3, .product-title'
+            )
+            link_el = item.select_one(
+                'a.woocommerce-LoopProduct-link, a.woocommerce-loop-product__link, a[href]'
+            )
+
+            if not name_el:
+                continue
+
+            name = name_el.get_text(strip=True)
+            if len(name) < 5:
+                continue
+
+            sale_el = item.select_one('.price ins .woocommerce-Price-amount, .price ins .amount')
+            regular_el = item.select_one('.price .woocommerce-Price-amount, .price .amount')
+            price_el = item.select_one('.price')
+
+            if sale_el:
+                price = parse_price(sale_el.get_text())
+            elif regular_el:
+                price = parse_price(regular_el.get_text())
+            elif price_el:
+                price = parse_price(price_el.get_text())
+            else:
+                price = None
+
+            link = ''
+            if link_el:
+                link = link_el.get('href', '')
+                if link and not link.startswith('http'):
+                    link = f"{base_url}{link}"
+
+            img_el = item.select_one('img')
+            image = ''
+            if img_el:
+                image = (
+                    img_el.get('data-src')
+                    or img_el.get('data-lazy-src')
+                    or img_el.get('src', '')
+                )
+                if image and not image.startswith('http'):
+                    image = f"{base_url}{image}"
+
+            item_text = item.get_text(' ', strip=True).lower()
+            out_of_stock = item.select_one('.out-of-stock, .soldout')
+            add_to_cart = item.select_one('.add_to_cart_button, .ajax_add_to_cart')
+
+            if out_of_stock or 'rupture' in item_text:
+                in_stock = False
+            elif add_to_cart:
+                in_stock = True
+            elif 'ajouter' in item_text or 'panier' in item_text:
+                in_stock = True
+            else:
+                in_stock = 'indisponible' not in item_text
+
+            products.append({
+                'name': name, 'price': price, 'in_stock': in_stock,
+                'url': link, 'image_url': image, 'set_code': detect_set_code(name),
+            })
+        except Exception as e:
+            logger.warning(f"Erreur parsing WooCommerce ({base_url}): {e}")
+
+    logger.info(f"WooCommerce ({base_url}): {len(products)} produits trouves")
+    return products
+
+
+def scrape_philibert(url):
+    """Scraper pour Philibert (PrestaShop sur philibertnet.com)."""
+    products = []
+    html = fetch_page(url)
+    if not html:
+        return products
+
+    soup = BeautifulSoup(html, 'html.parser')
+
+    for item in soup.select(
+        '.product-miniature, .product-container, '
+        '.product_list_item, .product-item, article.product-miniature'
+    ):
+        try:
+            name_el = item.select_one(
+                '.product-title a, h2.product-title a, h3 a, .name a, a.product-name'
+            )
+            price_el = item.select_one(
+                '.price, .product-price, span[itemprop="price"], '
+                '.product-price-and-shipping .price'
+            )
+            if not name_el:
+                continue
+
+            name = name_el.get_text(strip=True)
+            if len(name) < 5:
+                continue
+
+            price = parse_price(price_el.get_text() if price_el else '')
+            link = name_el.get('href', '')
+            if link and not link.startswith('http'):
+                link = f"https://www.philibertnet.com{link}"
+
+            img_el = item.select_one('img')
+            image = ''
+            if img_el:
+                image = (
+                    img_el.get('data-src')
+                    or img_el.get('data-full-size-image-url')
+                    or img_el.get('src', '')
+                )
+
+            availability = item.select_one(
+                '.product-availability, .availability, [class*="availability"]'
+            )
+            out_of_stock_el = item.select_one('.out-of-stock, .unavailable')
+
+            if out_of_stock_el:
+                in_stock = False
+            elif availability:
+                avail_text = availability.get_text(strip=True).lower()
+                in_stock = ('dispo' in avail_text or 'en stock' in avail_text
+                            or 'available' in avail_text)
+            else:
+                add_btn = item.select_one(
+                    '.add-to-cart, [data-button-action="add-to-cart"]'
+                )
+                in_stock = add_btn is not None and not add_btn.get('disabled')
+
+            products.append({
+                'name': name, 'price': price, 'in_stock': in_stock,
+                'url': link, 'image_url': image, 'set_code': detect_set_code(name),
+            })
+        except Exception as e:
+            logger.warning(f"Erreur parsing Philibert: {e}")
+
+    logger.info(f"Philibert: {len(products)} produits trouves")
     return products
 
 
 def scrape_ultrajeux(url):
-    """Scraper pour UltraJeux."""
+    """Scraper pour UltraJeux (site custom, peu de classes CSS)."""
     products = []
     html = fetch_page(url)
     if not html:
@@ -191,98 +445,78 @@ def scrape_ultrajeux(url):
 
     soup = BeautifulSoup(html, 'html.parser')
 
-    for item in soup.select('.product-block, .product-item, .recherche_produit, .product_list_item'):
+    seen_urls = set()
+
+    for link_el in soup.select('a[href*="produit-"]'):
         try:
-            name_el = item.select_one('a.product-name, h3 a, .name a, a[title]')
-            price_el = item.select_one('.price, .product-price, .prix')
-            if not name_el:
+            href = link_el.get('href', '')
+            if not href or 'produit-' not in href:
                 continue
 
-            name = name_el.get_text(strip=True)
-            if not any(kw in name.lower() for kw in ['one piece', 'op-', 'op0', 'display']):
+            full_url = href if href.startswith('http') else f"https://www.ultrajeux.com/{href.lstrip('/')}"
+
+            if full_url in seen_urls:
                 continue
 
-            price = parse_price(price_el.get_text() if price_el else '')
-            link = name_el.get('href', '')
-            if link and not link.startswith('http'):
-                link = f"https://www.ultrajeux.com{link}"
-
-            img_el = item.select_one('img')
-            image = img_el.get('data-src', img_el.get('src', '')) if img_el else ''
-
-            stock_el = item.select_one('.availability, .stock')
-            in_stock = True
-            if stock_el:
-                stock_text = stock_el.get_text(strip=True).lower()
-                in_stock = 'rupture' not in stock_text and 'indisponible' not in stock_text
-
-            products.append({
-                'name': name, 'price': price, 'in_stock': in_stock,
-                'url': link, 'image_url': image, 'set_code': detect_set_code(name),
-            })
-        except Exception as e:
-            logger.warning(f"Erreur parsing UltraJeux: {e}")
-    return products
-
-
-def scrape_prestashop(url, base_url):
-    """Scraper generique pour sites PrestaShop (Philibert, LudiCorner, Dernier Bastion)."""
-    products = []
-    html = fetch_page(url)
-    if not html:
-        return products
-
-    soup = BeautifulSoup(html, 'html.parser')
-
-    for item in soup.select('.product-miniature, .product-container, .product_list_item, .product-item'):
-        try:
-            name_el = item.select_one('.product-title a, h3 a, .name a, a.product-name')
-            price_el = item.select_one('.price, .product-price, span[itemprop="price"]')
-            if not name_el:
+            name = link_el.get_text(strip=True)
+            if not name or len(name) < 5:
+                name = link_el.get('title', '')
+            if not name or len(name) < 5:
+                img = link_el.select_one('img')
+                if img:
+                    name = img.get('alt', '')
+            if not name or len(name) < 5:
                 continue
 
-            name = name_el.get_text(strip=True)
-            if not any(kw in name.lower() for kw in ['one piece', 'op-', 'op0', 'display']):
-                continue
+            container = link_el.parent
+            for _ in range(4):
+                if container and container.parent:
+                    container = container.parent
 
-            price = parse_price(price_el.get_text() if price_el else '')
-            link = name_el.get('href', '')
-            if link and not link.startswith('http'):
-                link = f"{base_url}{link}"
+            container_text = container.get_text(' ', strip=True) if container else ''
 
-            img_el = item.select_one('img')
-            image = img_el.get('data-src', img_el.get('src', '')) if img_el else ''
+            price = None
+            price_match = re.search(r'(\d+[,\.]\d{2})\s*\u20ac', container_text)
+            if price_match:
+                price = parse_price(price_match.group(0))
 
-            out_of_stock_el = item.select_one('.out-of-stock, .unavailable, .rupture')
-            add_to_cart = item.select_one('.add-to-cart, [data-button-action="add-to-cart"]')
-            stock_el = item.select_one('.availability, .stock, .product-availability')
-
-            if out_of_stock_el:
+            container_lower = container_text.lower()
+            if 'indisponible' in container_lower:
                 in_stock = False
-            elif add_to_cart:
-                in_stock = not add_to_cart.get('disabled')
-            elif stock_el:
-                stock_text = stock_el.get_text(strip=True).lower()
-                in_stock = 'rupture' not in stock_text and 'indisponible' not in stock_text
+            elif 'disponible' in container_lower:
+                in_stock = True
             else:
                 in_stock = price is not None
 
+            img_el = link_el.select_one('img')
+            if not img_el and container:
+                img_el = container.select_one('img')
+            image = ''
+            if img_el:
+                image = img_el.get('data-src', img_el.get('src', ''))
+                if image and not image.startswith('http'):
+                    image = f"https://www.ultrajeux.com/{image.lstrip('/')}"
+
+            seen_urls.add(full_url)
             products.append({
                 'name': name, 'price': price, 'in_stock': in_stock,
-                'url': link, 'image_url': image, 'set_code': detect_set_code(name),
+                'url': full_url, 'image_url': image, 'set_code': detect_set_code(name),
             })
         except Exception as e:
-            logger.warning(f"Erreur parsing PrestaShop ({base_url}): {e}")
+            logger.warning(f"Erreur parsing UltraJeux: {e}")
+
+    logger.info(f"UltraJeux: {len(products)} produits trouves")
     return products
 
 
 # Registre des scrapers : slug -> fonction
 SCRAPER_REGISTRY = {
-    'pokecardex': scrape_pokecardex,
+    'relictcg': scrape_relictcg,
+    'destocktcg': scrape_destocktcg,
+    'coindesbarons': lambda url: scrape_woocommerce(url, 'https://lecoindesbarons.com'),
+    'philibert': scrape_philibert,
     'ultrajeux': scrape_ultrajeux,
-    'philibert': lambda url: scrape_prestashop(url, 'https://www.philibert.net'),
-    'ludicorner': lambda url: scrape_prestashop(url, 'https://www.ludicorner.com'),
-    'dernier-bastion': lambda url: scrape_prestashop(url, 'https://www.dernierbastion.fr'),
+    'guizettefamily': lambda url: scrape_woocommerce(url, 'https://www.guizettefamily.com'),
 }
 
 
@@ -364,8 +598,11 @@ def run_scan():
                 except Exception as e:
                     logger.error(f"  Erreur sur {url}: {e}")
 
+            displays = [p for p in site_products if is_french_display(p['name'])]
+            logger.info(f"  {len(displays)}/{len(site_products)} sont des displays FR")
+
             saved = 0
-            for product in site_products:
+            for product in displays:
                 try:
                     save_product(conn, site['id'], product)
                     saved += 1
@@ -374,8 +611,9 @@ def run_scan():
 
             last_scan_info['results'][site_slug] = {
                 'status': 'ok', 'count': saved, 'total_found': len(site_products),
+                'displays_fr': len(displays),
             }
-            logger.info(f"  {site['name']}: {saved}/{len(site_products)} sauvegardes")
+            logger.info(f"  {site['name']}: {saved} sauvegardes ({len(displays)} displays FR / {len(site_products)} total)")
 
         conn.execute(
             "INSERT INTO scan_log (started_at, finished_at, results) VALUES (?, ?, ?)",

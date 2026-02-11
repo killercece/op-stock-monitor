@@ -10,11 +10,38 @@ DB_PATH = Path(os.getenv('DATABASE_PATH', 'data/app.db'))
 
 INITIAL_SITES = [
     {
-        'name': 'Pokecardex',
-        'slug': 'pokecardex',
-        'url': 'https://www.pokecardex.com',
+        'name': 'RelicTCG',
+        'slug': 'relictcg',
+        'url': 'https://www.relictcg.com',
         'search_urls': json.dumps([
-            'https://www.pokecardex.com/catalogsearch/result/?q=display+one+piece',
+            'https://www.relictcg.com/collections/display-boosters-one-piece/products.json',
+        ]),
+        'enabled': 1,
+    },
+    {
+        'name': 'DestockTCG',
+        'slug': 'destocktcg',
+        'url': 'https://www.destocktcg.fr',
+        'search_urls': json.dumps([
+            'https://www.destocktcg.fr/jeux-de-cartes-a-collectionner/one-piece-card-game/boosters-et-boite-de-boosters-en-francais/',
+        ]),
+        'enabled': 1,
+    },
+    {
+        'name': 'Le Coin des Barons',
+        'slug': 'coindesbarons',
+        'url': 'https://lecoindesbarons.com',
+        'search_urls': json.dumps([
+            'https://lecoindesbarons.com/les-tcg/cartes-onepiece/display-one-piece/',
+        ]),
+        'enabled': 1,
+    },
+    {
+        'name': 'Philibert',
+        'slug': 'philibert',
+        'url': 'https://www.philibertnet.com',
+        'search_urls': json.dumps([
+            'https://www.philibertnet.com/fr/17214-one-piece-le-jeu-de-cartes',
         ]),
         'enabled': 1,
     },
@@ -23,34 +50,16 @@ INITIAL_SITES = [
         'slug': 'ultrajeux',
         'url': 'https://www.ultrajeux.com',
         'search_urls': json.dumps([
-            'https://www.ultrajeux.com/recherche.php?search=display+one+piece',
+            'https://www.ultrajeux.com/jeu-1031-one-piece-card-game.html',
         ]),
         'enabled': 1,
     },
     {
-        'name': 'Philibert',
-        'slug': 'philibert',
-        'url': 'https://www.philibert.net',
+        'name': 'Guizette Family',
+        'slug': 'guizettefamily',
+        'url': 'https://www.guizettefamily.com',
         'search_urls': json.dumps([
-            'https://www.philibert.net/fr/recherche?controller=search&s=display+one+piece',
-        ]),
-        'enabled': 1,
-    },
-    {
-        'name': 'LudiCorner',
-        'slug': 'ludicorner',
-        'url': 'https://www.ludicorner.com',
-        'search_urls': json.dumps([
-            'https://www.ludicorner.com/recherche?controller=search&s=display+one+piece',
-        ]),
-        'enabled': 1,
-    },
-    {
-        'name': 'Dernier Bastion',
-        'slug': 'dernier-bastion',
-        'url': 'https://www.dernierbastion.fr',
-        'search_urls': json.dumps([
-            'https://www.dernierbastion.fr/recherche?controller=search&s=display+one+piece',
+            'https://www.guizettefamily.com/categorie/one-piece/',
         ]),
         'enabled': 1,
     },
