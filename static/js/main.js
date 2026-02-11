@@ -19,7 +19,6 @@ async function init() {
     initTheme();
     await Promise.all([loadSets(), loadStats()]);
     await loadProducts();
-    initSSE();
     startPolling();
 }
 
@@ -273,7 +272,11 @@ async function triggerScan() {
         var resp = await fetch('/api/scan', { method: 'POST' });
         var data = await resp.json();
 
-        if (!resp.ok) {
+        if (resp.ok) {
+            showToast('Scan lance...', 'info');
+            wasRunning = true;
+            schedulePoll(2000);
+        } else {
             showToast(data.error || 'Erreur', 'error');
             btn.disabled = false;
             btn.closest('.toolbar-actions').classList.remove('scanning');
@@ -333,8 +336,15 @@ function initSSE() {
    ------------------------------------------------------------ */
 
 function startPolling() {
-    if (pollTimer) clearInterval(pollTimer);
-    pollTimer = setInterval(checkScanStatus, 10000);
+    checkScanStatus();
+    schedulePoll(10000);
+}
+
+function schedulePoll(ms) {
+    if (pollTimer) clearTimeout(pollTimer);
+    pollTimer = setTimeout(function() {
+        checkScanStatus();
+    }, ms);
 }
 
 async function checkScanStatus() {
@@ -351,6 +361,7 @@ async function checkScanStatus() {
                 showToast('Scan en cours...', 'info');
             }
             wasRunning = true;
+            schedulePoll(3000);
         } else {
             if (wasRunning) {
                 setScanRunning(false);
@@ -363,9 +374,10 @@ async function checkScanStatus() {
                 updateLastScanTime(status.finished_at);
             }
             wasRunning = false;
+            schedulePoll(15000);
         }
     } catch (e) {
-        /* ignorer */
+        schedulePoll(15000);
     }
 }
 
