@@ -141,44 +141,6 @@ def parse_price(price_text):
 # SCRAPERS PAR SITE
 # ============================================================
 
-def scrape_cardmarket(url):
-    """Scraper pour Cardmarket - Booster Boxes One Piece."""
-    products = []
-    html = fetch_page(url)
-    if not html:
-        return products
-
-    soup = BeautifulSoup(html, 'html.parser')
-
-    for item in soup.select('.table-body .row, .col-12.col-md-8, .product-card'):
-        try:
-            name_el = item.select_one('a[href*="/Products/"], a.name')
-            price_el = item.select_one('.price-container span, .col-price span, .price')
-            if not name_el:
-                continue
-
-            name = name_el.get_text(strip=True)
-            if not any(kw in name.lower() for kw in ['one piece', 'op-', 'op0']):
-                continue
-
-            price = parse_price(price_el.get_text() if price_el else '')
-            link = name_el.get('href', '')
-            if link and not link.startswith('http'):
-                link = f"https://www.cardmarket.com{link}"
-
-            img_el = item.select_one('img')
-            image = img_el.get('src', '') if img_el else ''
-            in_stock = price is not None and price > 0
-
-            products.append({
-                'name': name, 'price': price, 'in_stock': in_stock,
-                'url': link, 'image_url': image, 'set_code': detect_set_code(name),
-            })
-        except Exception as e:
-            logger.warning(f"Erreur parsing Cardmarket: {e}")
-    return products
-
-
 def scrape_pokecardex(url):
     """Scraper pour Pokecardex."""
     products = []
@@ -316,7 +278,6 @@ def scrape_prestashop(url, base_url):
 
 # Registre des scrapers : slug -> fonction
 SCRAPER_REGISTRY = {
-    'cardmarket': scrape_cardmarket,
     'pokecardex': scrape_pokecardex,
     'ultrajeux': scrape_ultrajeux,
     'philibert': lambda url: scrape_prestashop(url, 'https://www.philibert.net'),

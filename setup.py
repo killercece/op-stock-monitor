@@ -10,15 +10,6 @@ DB_PATH = Path(os.getenv('DATABASE_PATH', 'data/app.db'))
 
 INITIAL_SITES = [
     {
-        'name': 'Cardmarket',
-        'slug': 'cardmarket',
-        'url': 'https://www.cardmarket.com',
-        'search_urls': json.dumps([
-            'https://www.cardmarket.com/fr/OnePiece/Products/Booster-Boxes',
-        ]),
-        'enabled': 1,
-    },
-    {
         'name': 'Pokecardex',
         'slug': 'pokecardex',
         'url': 'https://www.pokecardex.com',
