@@ -147,16 +147,17 @@ def detect_set_code(name):
 def is_french_display(name):
     """Verifie si le produit est un display unique en francais (pas case, pas bundle)."""
     name_lower = name.lower()
-    if 'display' not in name_lower and 'boite de 24' not in name_lower:
+    if 'display' not in name_lower and 'boite de 24' not in name_lower and 'boite de 20' not in name_lower:
         return False
     # Exclure les langues non-francaises
-    lang_excluded = ['(en)', '(eng)', '(jap)', '(jpn)', '- en', '- eng',
-                     '- jap', '- jpn', ' en ', ' eng ', ' jap ', ' jpn ',
+    # Note : eviter '- en' et ' en ' qui matchent le francais "en francais"
+    lang_excluded = ['(en)', '(eng)', '(jap)', '(jpn)',
                      'english', 'japanese', 'japonais', 'anglais']
     for ex in lang_excluded:
         if ex in name_lower:
             return False
-    if name_lower.endswith(' en') or name_lower.endswith(' jpn'):
+    # Codes langue en suffixe (ex: "Display OP10 - JPN", "Display OP10 - EN")
+    if re.search(r'[-\s](en|eng|jap|jpn)\s*$', name_lower):
         return False
     # Exclure les cases de displays (cartons de 10/12 displays)
     if 'case de' in name_lower or 'case -' in name_lower:
@@ -640,12 +641,17 @@ def scrape_philibert(url):
 
 
 def scrape_ultrajeux(url):
-    """Scraper pour UltraJeux (site custom sans classes CSS structurees).
+    """Scraper pour UltraJeux (site custom).
 
-    La page liste les produits de facon lineaire sans conteneur par produit.
-    Chaque produit est une sequence : image-link, texte-link, prix, disponibilite.
-    On parcourt les liens texte vers 'produit-*' et on lit les freres suivants
-    pour trouver le prix et la disponibilite.
+    Structure HTML verifiee (fevrier 2026) :
+      div.block_produit
+        > div.contenu_block_produit_all
+          > div.contenu
+            > p.titre > a[href*="produit-"] > b  (nom du produit)
+            > form
+              > p.image > a > img.produit_scan    (image)
+              > p.prix > span.prix                (prix, ex: "189,90 euro")
+              > p.disponibilite > span > b         (Disponible / Indisponible)
     """
     products = []
     html = fetch_page(url)
@@ -653,62 +659,34 @@ def scrape_ultrajeux(url):
         return products
 
     soup = BeautifulSoup(html, 'html.parser')
-    seen_urls = set()
 
-    for link_el in soup.select('a[href*="produit-"]'):
+    for block in soup.select('div.block_produit'):
         try:
-            name = link_el.get_text(strip=True)
+            title_link = block.select_one('p.titre a[href*="produit-"]')
+            if not title_link:
+                continue
+
+            name = title_link.get_text(strip=True)
             if not name or len(name) < 5:
                 continue
 
-            href = link_el.get('href', '')
+            href = title_link.get('href', '')
             full_url = href if href.startswith('http') else f"https://www.ultrajeux.com/{href.lstrip('/')}"
 
-            if full_url in seen_urls:
-                continue
-            seen_urls.add(full_url)
+            price_el = block.select_one('p.prix span.prix')
+            price = parse_price(price_el.get_text(strip=True)) if price_el else None
 
-            # Chercher le prix et le stock dans les elements freres suivants
-            price = None
-            in_stock = None
-
-            sibling = link_el.next_sibling
-            siblings_text = ''
-            for _ in range(8):
-                if sibling is None:
-                    break
-                if hasattr(sibling, 'get_text'):
-                    siblings_text += ' ' + sibling.get_text(' ', strip=True)
-                elif isinstance(sibling, str):
-                    siblings_text += ' ' + sibling.strip()
-                sibling = sibling.next_sibling if hasattr(sibling, 'next_sibling') else None
-
-            price_match = re.search(r'(\d+[,\.]\d{2})\s*\u20ac', siblings_text)
-            if price_match:
-                price = parse_price(price_match.group(0))
-
-            siblings_lower = siblings_text.lower()
-            if 'indisponible' in siblings_lower:
+            stock_el = block.select_one('p.disponibilite')
+            stock_text = stock_el.get_text(strip=True).lower() if stock_el else ''
+            if 'indisponible' in stock_text:
                 in_stock = False
-            elif 'disponible' in siblings_lower:
+            elif 'disponible' in stock_text:
                 in_stock = True
             else:
                 in_stock = price is not None
 
-            # Image : le lien precedent frere devrait etre le lien image
-            image = ''
-            prev = link_el.previous_sibling
-            for _ in range(4):
-                if prev is None:
-                    break
-                if hasattr(prev, 'select_one'):
-                    img_el = prev.select_one('img')
-                    if img_el:
-                        image = img_el.get('data-src', img_el.get('src', ''))
-                        if image and not image.startswith('http'):
-                            image = f"https://www.ultrajeux.com/{image.lstrip('/')}"
-                        break
-                prev = prev.previous_sibling if hasattr(prev, 'previous_sibling') else None
+            img_el = block.select_one('img.produit_scan')
+            image = img_el.get('src', '') if img_el else ''
 
             products.append({
                 'name': name, 'price': price, 'in_stock': in_stock,
