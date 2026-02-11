@@ -5,7 +5,7 @@
 let groups = [];
 let chartInstance = null;
 let searchTimeout = null;
-let scanPollInterval = null;
+let eventSource = null;
 
 /* ------------------------------------------------------------
    Initialisation
@@ -17,7 +17,7 @@ async function init() {
     initTheme();
     await Promise.all([loadSets(), loadStats()]);
     await loadProducts();
-    pollScanStatus();
+    initSSE();
 }
 
 /* ------------------------------------------------------------
@@ -114,7 +114,8 @@ function renderStats(stats) {
     setText('stat-sites', stats.total_sites || 0);
     setText('stat-best', stats.best_price ? stats.best_price.toFixed(2) + ' \u20ac' : '-');
 
-    if (stats.last_scan && stats.last_scan.finished_at) {
+    var scanEl = document.getElementById('scan-info');
+    if (scanEl && scanEl.textContent === '-' && stats.last_scan && stats.last_scan.finished_at) {
         var d = new Date(stats.last_scan.finished_at);
         setText('scan-info', 'Dernier scan : ' + formatTime(d));
     }
@@ -269,10 +270,7 @@ async function triggerScan() {
         var resp = await fetch('/api/scan', { method: 'POST' });
         var data = await resp.json();
 
-        if (resp.ok) {
-            showToast('Scan lance...', 'info');
-            startScanPolling();
-        } else {
+        if (!resp.ok) {
             showToast(data.error || 'Erreur', 'error');
             btn.disabled = false;
             btn.closest('.toolbar-actions').classList.remove('scanning');
@@ -284,42 +282,66 @@ async function triggerScan() {
     }
 }
 
-function startScanPolling() {
-    if (scanPollInterval) clearInterval(scanPollInterval);
-    scanPollInterval = setInterval(async function() {
-        try {
-            var resp = await fetch('/api/scan/status');
-            var status = await resp.json();
+/* ------------------------------------------------------------
+   SSE (Server-Sent Events) - Mises a jour temps reel
+   ------------------------------------------------------------ */
 
-            if (!status.running) {
-                clearInterval(scanPollInterval);
-                scanPollInterval = null;
-                var btn = document.getElementById('btn-scan');
-                btn.disabled = false;
-                btn.closest('.toolbar-actions').classList.remove('scanning');
-                showToast('Scan termine !', 'success');
-                loadProducts();
-                loadStats();
-                loadSets();
-            }
-        } catch (e) {
-            /* ignorer */
+function initSSE() {
+    if (eventSource) eventSource.close();
+
+    eventSource = new EventSource('/api/scan/stream');
+
+    eventSource.addEventListener('scan:status', function(e) {
+        var data = JSON.parse(e.data);
+        if (data.running) {
+            setScanRunning(true);
+        } else if (data.finished_at) {
+            updateLastScanTime(data.finished_at);
         }
-    }, 3000);
+    });
+
+    eventSource.addEventListener('scan:started', function(e) {
+        setScanRunning(true);
+        showToast('Scan en cours...', 'info');
+    });
+
+    eventSource.addEventListener('scan:progress', function(e) {
+        var data = JSON.parse(e.data);
+        setText('scan-info', 'Scan en cours... (' + data.sites_done + '/' + data.sites_total + ' sites)');
+    });
+
+    eventSource.addEventListener('scan:completed', function(e) {
+        var data = JSON.parse(e.data);
+        setScanRunning(false);
+        updateLastScanTime(data.finished_at);
+        showToast('Scan termine !', 'success');
+        loadProducts();
+        loadStats();
+        loadSets();
+    });
+
+    eventSource.onerror = function() {
+        /* EventSource reconnecte automatiquement */
+    };
 }
 
-function pollScanStatus() {
-    fetch('/api/scan/status')
-        .then(function(r) { return r.json(); })
-        .then(function(status) {
-            if (status.running) {
-                var btn = document.getElementById('btn-scan');
-                btn.disabled = true;
-                btn.closest('.toolbar-actions').classList.add('scanning');
-                startScanPolling();
-            }
-        })
-        .catch(function() {});
+function setScanRunning(running) {
+    var btn = document.getElementById('btn-scan');
+    var actions = btn.closest('.toolbar-actions');
+    btn.disabled = running;
+    if (running) {
+        actions.classList.add('scanning');
+        setText('scan-info', 'Scan en cours...');
+    } else {
+        actions.classList.remove('scanning');
+    }
+}
+
+function updateLastScanTime(isoString) {
+    if (!isoString) return;
+    var d = new Date(isoString);
+    if (isNaN(d.getTime())) return;
+    setText('scan-info', 'Dernier scan : ' + formatTime(d));
 }
 
 /* ------------------------------------------------------------

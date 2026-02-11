@@ -352,6 +352,11 @@ a:hover { text-decoration: underline; }
     white-space: nowrap;
 }
 
+.scanning .scan-info {
+    color: var(--primary);
+    font-weight: 600;
+}
+
 /* ============================================================
    Buttons
    ============================================================ */

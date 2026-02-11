@@ -4,9 +4,9 @@ Surveillance de stock et prix de displays One Piece TCG
 sur les principaux sites e-commerce francais.
 """
 
-__version__ = '1.4.0'
+__version__ = '1.5.0'
 
-from flask import Flask, render_template, jsonify, request, g
+from flask import Flask, render_template, jsonify, request, g, Response
 from apscheduler.schedulers.background import BackgroundScheduler
 from bs4 import BeautifulSoup
 import requests as http_requests
@@ -17,6 +17,7 @@ import json
 import time
 import re
 import threading
+import queue
 import atexit
 from pathlib import Path
 from datetime import datetime
@@ -51,6 +52,23 @@ last_scan_info = {
     'running': False,
 }
 scan_lock = threading.Lock()
+
+# SSE (Server-Sent Events) - Mises a jour temps reel
+_sse_clients = []
+_sse_lock = threading.Lock()
+
+
+def broadcast_event(event_type, data):
+    """Envoie un evenement SSE a tous les clients connectes."""
+    with _sse_lock:
+        dead = []
+        for q in _sse_clients:
+            try:
+                q.put_nowait({'event': event_type, 'data': data})
+            except queue.Full:
+                dead.append(q)
+        for q in dead:
+            _sse_clients.remove(q)
 
 
 # ============================================================
@@ -935,6 +953,9 @@ def run_scan():
     last_scan_info['results'] = {}
 
     logger.info("=== Debut du scan ===")
+    broadcast_event('scan:started', {
+        'started_at': last_scan_info['started_at'],
+    })
     conn = get_standalone_db()
 
     try:
@@ -1000,6 +1021,12 @@ def run_scan():
                 'displays_fr': len(displays),
             }
             logger.info(f"  {site['name']}: {saved} sauvegardes ({len(displays)} displays FR / {len(site_products)} total)")
+            broadcast_event('scan:progress', {
+                'site_name': site['name'],
+                'sites_done': len(last_scan_info['results']),
+                'sites_total': len(sites),
+                'products_found': saved,
+            })
 
         conn.execute(
             "INSERT INTO scan_log (started_at, finished_at, results) VALUES (?, ?, ?)",
@@ -1015,6 +1042,10 @@ def run_scan():
         with scan_lock:
             last_scan_info['running'] = False
         last_scan_info['finished_at'] = datetime.now().isoformat()
+        broadcast_event('scan:completed', {
+            'finished_at': last_scan_info['finished_at'],
+            'results': last_scan_info['results'],
+        })
         logger.info("=== Fin du scan ===")
 
 
@@ -1341,6 +1372,47 @@ def api_trigger_scan():
 def api_scan_status():
     """Statut du dernier scan."""
     return jsonify(last_scan_info), 200
+
+
+@app.route('/api/scan/stream')
+def scan_stream():
+    """Endpoint SSE pour les mises a jour de scan en temps reel."""
+    client_queue = queue.Queue(maxsize=50)
+    with _sse_lock:
+        _sse_clients.append(client_queue)
+
+    initial = {
+        'running': last_scan_info['running'],
+        'started_at': last_scan_info.get('started_at'),
+        'finished_at': last_scan_info.get('finished_at'),
+    }
+
+    def generate():
+        """Generateur SSE avec keepalive toutes les 30s."""
+        yield f"event: scan:status\ndata: {json.dumps(initial)}\n\n"
+        try:
+            while True:
+                try:
+                    msg = client_queue.get(timeout=30)
+                    yield f"event: {msg['event']}\ndata: {json.dumps(msg['data'])}\n\n"
+                except queue.Empty:
+                    yield ": keepalive\n\n"
+        except GeneratorExit:
+            pass
+        finally:
+            with _sse_lock:
+                if client_queue in _sse_clients:
+                    _sse_clients.remove(client_queue)
+
+    return Response(
+        generate(),
+        mimetype='text/event-stream',
+        headers={
+            'Cache-Control': 'no-cache',
+            'X-Accel-Buffering': 'no',
+            'Connection': 'keep-alive',
+        },
+    )
 
 
 # ============================================================
