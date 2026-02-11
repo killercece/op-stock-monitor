@@ -119,6 +119,25 @@ def init_database():
         CREATE INDEX IF NOT EXISTS idx_history_date ON price_history(checked_at);
     """)
 
+    # Nettoyer les anciens sites et donnees orphelines
+    existing_slugs = [s['slug'] for s in INITIAL_SITES]
+    placeholders = ','.join('?' * len(existing_slugs))
+    cursor.execute(
+        f"DELETE FROM price_history WHERE product_id IN "
+        f"(SELECT p.id FROM products p JOIN sites s ON p.site_id = s.id "
+        f"WHERE s.slug NOT IN ({placeholders}))",
+        existing_slugs,
+    )
+    cursor.execute(
+        f"DELETE FROM products WHERE site_id IN "
+        f"(SELECT id FROM sites WHERE slug NOT IN ({placeholders}))",
+        existing_slugs,
+    )
+    cursor.execute(
+        f"DELETE FROM sites WHERE slug NOT IN ({placeholders})",
+        existing_slugs,
+    )
+
     for site in INITIAL_SITES:
         cursor.execute(
             """INSERT OR IGNORE INTO sites (name, slug, url, search_urls, enabled)
