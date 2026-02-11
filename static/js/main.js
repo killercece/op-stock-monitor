@@ -147,8 +147,17 @@ function createGroupCard(g) {
     card.className = 'group-card';
 
     var hasImage = g.image_url && g.image_url.length > 5;
-    var stockClass = g.any_in_stock ? 'badge-stock' : 'badge-oos';
-    var stockText = g.any_in_stock ? '\u25CF Disponible' : '\u25CF Rupture';
+    var stockClass, stockText;
+    if (g.any_in_stock) {
+        stockClass = 'badge-stock';
+        stockText = '\u25CF Disponible';
+    } else if (g.any_preorder) {
+        stockClass = 'badge-preorder';
+        stockText = '\u25CF Pr\u00e9-commande';
+    } else {
+        stockClass = 'badge-oos';
+        stockText = '\u25CF Rupture';
+    }
     var bestPriceHtml = g.best_price
         ? formatPrice(g.best_price)
         : '<span class="no-price">-</span>';
@@ -173,13 +182,19 @@ function createGroupCard(g) {
     var shopRows = '';
     g.shops.forEach(function(s) {
         var priceText = s.price ? s.price.toFixed(2) + ' \u20ac' : '-';
-        var stockBadge = s.in_stock
-            ? '<span class="badge badge-stock badge-sm">\u25CF En stock</span>'
-            : '<span class="badge badge-oos badge-sm">\u25CF Rupture</span>';
+        var stockBadge;
+        if (s.in_stock) {
+            stockBadge = '<span class="badge badge-stock badge-sm">\u25CF En stock</span>';
+        } else if (s.preorder) {
+            stockBadge = '<span class="badge badge-preorder badge-sm">\u25CF Pr\u00e9co</span>';
+        } else {
+            stockBadge = '<span class="badge badge-oos badge-sm">\u25CF Rupture</span>';
+        }
         var isBest = s.price && g.best_price && s.price === g.best_price && s.in_stock;
 
+        var rowClass = s.in_stock ? '' : (s.preorder ? 'shop-preorder' : 'shop-oos');
         shopRows +=
-            '<tr class="' + (s.in_stock ? '' : 'shop-oos') + '">' +
+            '<tr class="' + rowClass + '">' +
                 '<td class="shop-name">' + escapeHtml(s.site_name) + '</td>' +
                 '<td class="shop-price' + (isBest ? ' best-price' : '') + '">' + priceText + '</td>' +
                 '<td>' + stockBadge + '</td>' +

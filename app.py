@@ -4,7 +4,7 @@ Surveillance de stock et prix de displays One Piece TCG
 sur les principaux sites e-commerce francais.
 """
 
-__version__ = '1.3.1'
+__version__ = '1.4.0'
 
 from flask import Flask, render_template, jsonify, request, g
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -78,6 +78,23 @@ def get_standalone_db():
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     return conn
+
+
+def migrate_db():
+    """Migrations legeres au demarrage (ajout de colonnes)."""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    # Ajouter colonne preorder si absente
+    cols = [row[1] for row in cursor.execute("PRAGMA table_info(price_history)").fetchall()]
+    if 'preorder' not in cols:
+        cursor.execute("ALTER TABLE price_history ADD COLUMN preorder INTEGER DEFAULT 0")
+        conn.commit()
+        logger.info("Migration: colonne 'preorder' ajoutee a price_history")
+    conn.close()
+
+
+if DB_PATH.exists():
+    migrate_db()
 
 
 # ============================================================
@@ -227,7 +244,7 @@ def scrape_relictcg(url):
             products.append({
                 'name': name,
                 'price': price if price and price > 0 else None,
-                'in_stock': in_stock,
+                'in_stock': in_stock, 'preorder': False,
                 'url': product_url,
                 'image_url': image_url,
                 'set_code': detect_set_code(name),
@@ -292,10 +309,20 @@ def scrape_destocktcg(url):
 
             # Rupture indiquee par span.product-item-label.outofstock
             outofstock_label = item.select_one('.product-item-label.outofstock')
-            in_stock = outofstock_label is None
+            preorder_label = item.select_one('.product-item-label.preorder, .product-item-label.precommande')
+            item_text = item.get_text(' ', strip=True).lower()
+            is_preorder = preorder_label is not None or 'commande' in item_text
+
+            if outofstock_label:
+                in_stock = False
+            elif is_preorder:
+                in_stock = False
+            else:
+                in_stock = True
 
             products.append({
                 'name': name, 'price': price, 'in_stock': in_stock,
+                'preorder': is_preorder,
                 'url': link, 'image_url': image, 'set_code': detect_set_code(name),
             })
         except Exception as e:
@@ -372,8 +399,11 @@ def scrape_woocommerce(url, base_url):
             item_text = item.get_text(' ', strip=True).lower()
             out_of_stock = item.select_one('.out-of-stock, .soldout')
             add_to_cart = item.select_one('.add_to_cart_button, .ajax_add_to_cart')
+            is_preorder = 'commande' in item_text or 'preorder' in item_text
 
             if out_of_stock or 'rupture' in item_text:
+                in_stock = False
+            elif is_preorder:
                 in_stock = False
             elif add_to_cart:
                 in_stock = True
@@ -384,6 +414,7 @@ def scrape_woocommerce(url, base_url):
 
             products.append({
                 'name': name, 'price': price, 'in_stock': in_stock,
+                'preorder': is_preorder,
                 'url': link, 'image_url': image, 'set_code': detect_set_code(name),
             })
         except Exception as e:
@@ -433,6 +464,7 @@ def scrape_coindesbarons(url):
                     stock_status = gtm_data.get('stockstatus', '')
                     product_link = gtm_data.get('productlink', '')
                     in_stock = stock_status == 'instock'
+                    is_preorder = stock_status == 'onbackorder'
 
                     if name and len(name) >= 5:
                         img_el = item.select_one('.card-image img')
@@ -448,6 +480,7 @@ def scrape_coindesbarons(url):
                             'name': name,
                             'price': float(price) if price else None,
                             'in_stock': in_stock,
+                            'preorder': is_preorder,
                             'url': product_link,
                             'image_url': image,
                             'set_code': detect_set_code(name),
@@ -495,9 +528,14 @@ def scrape_coindesbarons(url):
             # Stock : bouton add_to_cart present = en stock ; "Rupture" dans .links = rupture
             links_div = item.select_one('.links')
             links_text = links_div.get_text(' ', strip=True).lower() if links_div else ''
+            preorder_el = item.select_one('.card-right')
+            preorder_text = preorder_el.get_text(' ', strip=True).lower() if preorder_el else ''
+            is_preorder = 'commande' in preorder_text
             add_to_cart = item.select_one('.add_to_cart_button')
 
             if 'rupture' in links_text:
+                in_stock = False
+            elif is_preorder:
                 in_stock = False
             elif add_to_cart:
                 in_stock = True
@@ -506,6 +544,7 @@ def scrape_coindesbarons(url):
 
             products.append({
                 'name': name, 'price': price, 'in_stock': in_stock,
+                'preorder': is_preorder,
                 'url': link, 'image_url': image, 'set_code': detect_set_code(name),
             })
         except Exception as e:
@@ -575,19 +614,19 @@ def scrape_philibert(url):
             # Disponibilite : precommande et "a venir" ne sont PAS en stock
             add_btn = item.select_one('.ajax_add_to_cart_button')
             comingsoon = item.select_one('.comingsoon-label')
-            preorder = item.select_one('.preorder-label')
+            preorder_label = item.select_one('.preorder-label')
+            is_preorder = bool(comingsoon or preorder_label)
 
-            if comingsoon or preorder:
-                # "A venir" ou precommande = pas en stock
+            if is_preorder:
                 in_stock = False
             elif add_btn and not add_btn.get('disabled'):
-                # Bouton actif sans label precommande = achetable maintenant
                 in_stock = True
             else:
                 in_stock = False
 
             products.append({
                 'name': name, 'price': price, 'in_stock': in_stock,
+                'preorder': is_preorder,
                 'url': link, 'image_url': image, 'set_code': detect_set_code(name),
             })
         except Exception as e:
@@ -619,7 +658,7 @@ def scrape_philibert(url):
                     products.append({
                         'name': name,
                         'price': float(price_val) if price_val else None,
-                        'in_stock': True,  # Le dataLayer ne donne pas le stock
+                        'in_stock': True, 'preorder': False,
                         'url': full_link,
                         'image_url': '',
                         'set_code': detect_set_code(name),
@@ -682,6 +721,7 @@ def scrape_ultrajeux(url):
 
             products.append({
                 'name': name, 'price': price, 'in_stock': in_stock,
+                'preorder': False,
                 'url': full_url, 'image_url': image, 'set_code': detect_set_code(name),
             })
         except Exception as e:
@@ -737,6 +777,7 @@ def scrape_antretemps(url):
 
             products.append({
                 'name': name, 'price': price, 'in_stock': in_stock,
+                'preorder': False,
                 'url': link, 'image_url': image, 'set_code': detect_set_code(name),
             })
         except Exception as e:
@@ -796,9 +837,10 @@ def scrape_cardshunter(url):
             badge = item.select_one('.elementor-button-text')
             badge_text = badge.get_text(strip=True).lower() if badge else ''
 
+            is_preorder = 'commande' in badge_text
             in_stock = (price is not None
                         and 'rupture' not in badge_text
-                        and 'commande' not in badge_text)
+                        and not is_preorder)
 
             img_el = item.select_one('.jet-listing-dynamic-image__img')
             image = ''
@@ -807,6 +849,7 @@ def scrape_cardshunter(url):
 
             products.append({
                 'name': name, 'price': price, 'in_stock': in_stock,
+                'preorder': is_preorder,
                 'url': link, 'image_url': image, 'set_code': detect_set_code(name),
             })
         except Exception as e:
@@ -860,8 +903,10 @@ def save_product(conn, site_id, product_data):
         product_id = cursor.lastrowid
 
     conn.execute(
-        "INSERT INTO price_history (product_id, price, in_stock) VALUES (?, ?, ?)",
-        (product_id, product_data.get('price'), 1 if product_data.get('in_stock') else 0)
+        "INSERT INTO price_history (product_id, price, in_stock, preorder) VALUES (?, ?, ?, ?)",
+        (product_id, product_data.get('price'),
+         1 if product_data.get('in_stock') else 0,
+         1 if product_data.get('preorder') else 0)
     )
     conn.commit()
 
@@ -910,6 +955,9 @@ def run_scan():
             displays = [p for p in site_products if is_french_display(p['name'])]
             logger.info(f"  {len(displays)}/{len(site_products)} sont des displays FR")
 
+            # Marquer le debut du scan pour ce site (pour le nettoyage)
+            scan_start = datetime.now().isoformat()
+
             saved = 0
             for product in displays:
                 try:
@@ -917,6 +965,25 @@ def run_scan():
                     saved += 1
                 except Exception as e:
                     logger.error(f"  Erreur sauvegarde: {e}")
+
+            # Nettoyage : supprimer les produits de ce site non vus dans ce scan
+            stale = conn.execute(
+                "SELECT id FROM products WHERE site_id = ? AND last_seen < ?",
+                (site['id'], scan_start)
+            ).fetchall()
+            if stale:
+                stale_ids = [row['id'] for row in stale]
+                placeholders = ','.join('?' * len(stale_ids))
+                conn.execute(
+                    f"DELETE FROM price_history WHERE product_id IN ({placeholders})",
+                    stale_ids
+                )
+                conn.execute(
+                    f"DELETE FROM products WHERE id IN ({placeholders})",
+                    stale_ids
+                )
+                conn.commit()
+                logger.info(f"  Nettoyage: {len(stale_ids)} produit(s) obsolete(s) supprime(s)")
 
             last_scan_info['results'][site_slug] = {
                 'status': 'ok', 'count': saved, 'total_found': len(site_products),
@@ -1047,7 +1114,8 @@ def api_products_grouped():
         query = """
             SELECT p.id, p.name, p.set_code, p.url, p.image_url,
                    s.name as site_name, s.slug as site_slug,
-                   ph.price, ph.in_stock, ph.checked_at
+                   ph.price, ph.in_stock, ph.checked_at,
+                   COALESCE(ph.preorder, 0) as preorder
             FROM products p
             JOIN sites s ON p.site_id = s.id
             LEFT JOIN price_history ph ON ph.id = (
@@ -1084,6 +1152,7 @@ def api_products_grouped():
                     'image_url': '',
                     'best_price': None,
                     'any_in_stock': False,
+                    'any_preorder': False,
                     'shops': [],
                 }
             g = groups[code]
@@ -1100,6 +1169,8 @@ def api_products_grouped():
 
             if r['in_stock']:
                 g['any_in_stock'] = True
+            if r['preorder']:
+                g['any_preorder'] = True
             if r['price'] and (g['best_price'] is None or r['price'] < g['best_price']):
                 g['best_price'] = r['price']
 
@@ -1108,6 +1179,7 @@ def api_products_grouped():
                 'site_slug': r['site_slug'],
                 'price': r['price'],
                 'in_stock': r['in_stock'],
+                'preorder': r['preorder'],
                 'url': r['url'],
                 'product_id': r['id'],
                 'checked_at': r['checked_at'],
@@ -1115,10 +1187,10 @@ def api_products_grouped():
 
         result = sorted(groups.values(), key=lambda g: g['set_code'])
 
-        # Trier les shops de chaque groupe par prix croissant
+        # Trier les shops : en stock d'abord, puis precommande, puis rupture
         for g in result:
             g['shops'].sort(key=lambda s: (
-                0 if s['in_stock'] else 1,
+                0 if s['in_stock'] else (1 if s['preorder'] else 2),
                 s['price'] if s['price'] else 99999,
             ))
 

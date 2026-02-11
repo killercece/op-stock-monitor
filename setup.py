@@ -119,6 +119,7 @@ def init_database():
             product_id INTEGER NOT NULL,
             price REAL,
             in_stock INTEGER DEFAULT 0,
+            preorder INTEGER DEFAULT 0,
             checked_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (product_id) REFERENCES products(id)
         );
