@@ -72,6 +72,15 @@ INITIAL_SITES = [
         ]),
         'enabled': 1,
     },
+    {
+        'name': 'Cards Hunter',
+        'slug': 'cardshunter',
+        'url': 'https://www.cardshunter.fr',
+        'search_urls': json.dumps([
+            'https://www.cardshunter.fr/categorie-produit/autres-tcg/one-piece/one-piece-tcg-scelle/',
+        ]),
+        'enabled': 1,
+    },
 ]
 
 

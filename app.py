@@ -754,6 +754,74 @@ def scrape_antretemps(url):
     return products
 
 
+def scrape_cardshunter(url):
+    """Scraper pour Cards Hunter (WooCommerce + JetEngine/Elementor).
+
+    Structure HTML verifiee (fevrier 2026) :
+      div.jet-listing-grid__items
+        > div.jet-listing-grid__item[data-post-id]
+          > div.elementor
+            > div.e-con (container racine)
+              > div[data-widget_type="button.default"]
+                > span.elementor-button-text        (badge : PROMO, Pre-commande, Rupture...)
+              > div[data-widget_type="jet-listing-dynamic-image.default"]
+                > a.jet-listing-dynamic-image__link > img[data-lazy-src]
+              > h3.elementor-heading-title > a[href]  (nom + lien)
+              > div[data-widget_type="jet-listing-dynamic-field.default"]
+                > ins .woocommerce-Price-amount      (prix promo)
+                > .woocommerce-Price-amount           (prix normal)
+    """
+    products = []
+    html = fetch_page(url)
+    if not html:
+        return products
+
+    soup = BeautifulSoup(html, 'html.parser')
+    grid = soup.select_one('.jet-listing-grid__items')
+    if not grid:
+        logger.warning("Cards Hunter: grille JetEngine introuvable")
+        return products
+
+    for item in grid.find_all(recursive=False):
+        try:
+            heading = item.select_one('h3.elementor-heading-title a, h2.elementor-heading-title a')
+            if not heading:
+                continue
+
+            name = heading.get_text(strip=True)
+            if not name or len(name) < 5:
+                continue
+
+            link = heading.get('href', '')
+
+            # Prix promo (ins) prioritaire, sinon prix normal
+            sale_el = item.select_one('ins .woocommerce-Price-amount')
+            regular_el = item.select_one('.woocommerce-Price-amount')
+            price_el = sale_el or regular_el
+            price = parse_price(price_el.get_text(strip=True)) if price_el else None
+
+            # Badge (Pre-commande, PROMO, Rupture...)
+            badge = item.select_one('.elementor-button-text')
+            badge_text = badge.get_text(strip=True).lower() if badge else ''
+
+            in_stock = price is not None and 'rupture' not in badge_text
+
+            img_el = item.select_one('.jet-listing-dynamic-image__img')
+            image = ''
+            if img_el:
+                image = img_el.get('data-lazy-src', img_el.get('src', ''))
+
+            products.append({
+                'name': name, 'price': price, 'in_stock': in_stock,
+                'url': link, 'image_url': image, 'set_code': detect_set_code(name),
+            })
+        except Exception as e:
+            logger.warning(f"Erreur parsing Cards Hunter: {e}")
+
+    logger.info(f"Cards Hunter: {len(products)} produits trouves")
+    return products
+
+
 # Registre des scrapers : slug -> fonction
 SCRAPER_REGISTRY = {
     'relictcg': scrape_relictcg,
@@ -763,6 +831,7 @@ SCRAPER_REGISTRY = {
     'ultrajeux': scrape_ultrajeux,
     'guizettefamily': lambda url: scrape_woocommerce(url, 'https://www.guizettefamily.com'),
     'antretemps': scrape_antretemps,
+    'cardshunter': scrape_cardshunter,
 }
 
 
