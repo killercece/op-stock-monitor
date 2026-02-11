@@ -118,8 +118,8 @@ function renderStats(stats) {
 
     var scanEl = document.getElementById('scan-info');
     if (scanEl && scanEl.textContent === '-' && stats.last_scan && stats.last_scan.finished_at) {
-        var d = new Date(stats.last_scan.finished_at);
-        setText('scan-info', 'Dernier scan : ' + formatTime(d));
+        var d = parseUTC(stats.last_scan.finished_at);
+        if (d) setText('scan-info', 'Dernier scan : ' + formatTime(d));
     }
 }
 
@@ -397,8 +397,8 @@ function setScanRunning(running) {
 
 function updateLastScanTime(isoString) {
     if (!isoString) return;
-    var d = new Date(isoString);
-    if (isNaN(d.getTime())) return;
+    var d = parseUTC(isoString);
+    if (!d || isNaN(d.getTime())) return;
     setText('scan-info', 'Dernier scan : ' + formatTime(d));
 }
 
@@ -557,6 +557,14 @@ function showToast(message, type) {
 /* ------------------------------------------------------------
    Utilitaires
    ------------------------------------------------------------ */
+
+function parseUTC(isoString) {
+    if (!isoString) return null;
+    if (isoString.indexOf('Z') === -1 && isoString.indexOf('+') === -1) {
+        isoString += 'Z';
+    }
+    return new Date(isoString);
+}
 
 function setText(id, text) {
     var el = document.getElementById(id);
