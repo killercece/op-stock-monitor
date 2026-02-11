@@ -189,8 +189,8 @@ def is_french_display(name):
     # Exclure les cases/cartons de displays (cartons de 10/12 displays)
     if 'case de' in name_lower or 'case -' in name_lower or 'carton de' in name_lower or 'carton -' in name_lower:
         return False
-    # Exclure les bundles (display + autre produit)
-    if 'bundle' in name_lower or ' + ' in name_lower:
+    # Exclure les bundles et double packs (pas des displays de boosters)
+    if 'bundle' in name_lower or ' + ' in name_lower or 'double pack' in name_lower:
         return False
     return True
 
