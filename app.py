@@ -229,7 +229,21 @@ def scrape_relictcg(url):
 
 
 def scrape_destocktcg(url):
-    """Scraper pour DestockTCG (site custom PHP)."""
+    """Scraper pour DestockTCG (site custom PHP).
+
+    Structure HTML verifiee (fevrier 2026) :
+      article.product-item-list
+        > div.product-item-info
+          > div.product-image-wrapper
+            > span.product-item-label.outofstock  (si rupture)
+            > a[href="/product/..."] > img.product-image
+          > div.product-details
+            > div.product-item-prices-wrapper
+              > span.product-item-price          (prix normal)
+              > span.product-item-price.promo    (prix promo)
+              > span.product-item-price.base     (ancien prix barre)
+            > div.product-item-name.text-truncate > a[href]
+    """
     products = []
     html = fetch_page(url)
     if not html:
@@ -237,16 +251,9 @@ def scrape_destocktcg(url):
 
     soup = BeautifulSoup(html, 'html.parser')
 
-    for item in soup.select('.product-card, .product-item, .product, [class*="product"]'):
+    for item in soup.select('article.product-item-list'):
         try:
-            name_el = item.select_one(
-                '.product-name, .product-title, h3 a, h2 a, h3, h2'
-            )
-            price_el = item.select_one('.price, .product-price, [class*="price"]')
-            link_el = item.select_one('a[href*="/product"], a[href*="produit"]')
-            if not link_el:
-                link_el = item.select_one('a[href]')
-
+            name_el = item.select_one('.product-item-name a')
             if not name_el:
                 continue
 
@@ -254,24 +261,27 @@ def scrape_destocktcg(url):
             if len(name) < 5:
                 continue
 
+            # Prix promo (prioritaire) puis prix normal
+            price_el = (
+                item.select_one('.product-item-price.promo')
+                or item.select_one('.product-item-price')
+            )
             price = parse_price(price_el.get_text() if price_el else '')
 
-            link = ''
-            if link_el:
-                link = link_el.get('href', '')
-                if link and not link.startswith('http'):
-                    link = f"https://www.destocktcg.fr{link}"
+            link = name_el.get('href', '')
+            if link and not link.startswith('http'):
+                link = f"https://www.destocktcg.fr{link}"
 
-            img_el = item.select_one('img')
+            img_el = item.select_one('img.product-image')
             image = ''
             if img_el:
                 image = img_el.get('data-src', img_el.get('src', ''))
                 if image and not image.startswith('http'):
                     image = f"https://www.destocktcg.fr{image}"
 
-            classes = ' '.join(item.get('class', []))
-            item_text = item.get_text(' ', strip=True).lower()
-            in_stock = 'rupture' not in classes and 'rupture' not in item_text
+            # Rupture indiquee par span.product-item-label.outofstock
+            outofstock_label = item.select_one('.product-item-label.outofstock')
+            in_stock = outofstock_label is None
 
             products.append({
                 'name': name, 'price': price, 'in_stock': in_stock,
@@ -285,7 +295,13 @@ def scrape_destocktcg(url):
 
 
 def scrape_woocommerce(url, base_url):
-    """Scraper generique pour sites WooCommerce (Coin des Barons, Guizette Family)."""
+    """Scraper generique pour sites WooCommerce standard (ex: Guizette Family).
+
+    Utilise les selecteurs WooCommerce classiques :
+      ul.products > li.product
+      .woocommerce-loop-product__title
+      .woocommerce-Price-amount
+    """
     products = []
     html = fetch_page(url)
     if not html:
@@ -366,8 +382,27 @@ def scrape_woocommerce(url, base_url):
     return products
 
 
-def scrape_philibert(url):
-    """Scraper pour Philibert (PrestaShop sur philibertnet.com)."""
+def scrape_coindesbarons(url):
+    """Scraper dedie au Coin des Barons (WooCommerce theme custom 'barons').
+
+    Structure HTML verifiee (fevrier 2026) :
+      div.products.lists__wrap
+        > div.card-game  (ou .card-game.promo pour les promos)
+          > a[href]  (lien englobant le visuel et le titre)
+            > div.card-wrap
+              > div.card-image > img
+              > div.card-top > div.name  (categorie, ex: "One Piece")
+              > div.card-right > p       (badge precommande + date)
+              > div.card-price           (prix texte, ex: "269,99 EURO")
+              > div.card-promo           (si promo, texte "Promo")
+            > div.card-title > h2        (nom complet du produit)
+          > div.buttons > div.links
+            > button.add_to_cart_button  (si en stock)
+            > a > span "Rupture de stock" (si rupture)
+          > span.gtm4wp_productdata[data-gtm4wp_product_data]  (JSON structure)
+
+    Strategie : on utilise le JSON GTM4WP en priorite (fiable), avec fallback HTML.
+    """
     products = []
     html = fetch_page(url)
     if not html:
@@ -375,18 +410,43 @@ def scrape_philibert(url):
 
     soup = BeautifulSoup(html, 'html.parser')
 
-    for item in soup.select(
-        '.product-miniature, .product-container, '
-        '.product_list_item, .product-item, article.product-miniature'
-    ):
+    for item in soup.select('.card-game'):
         try:
-            name_el = item.select_one(
-                '.product-title a, h2.product-title a, h3 a, .name a, a.product-name'
-            )
-            price_el = item.select_one(
-                '.price, .product-price, span[itemprop="price"], '
-                '.product-price-and-shipping .price'
-            )
+            # Strategie 1 : JSON GTM4WP (le plus fiable)
+            gtm_span = item.select_one('span.gtm4wp_productdata[data-gtm4wp_product_data]')
+            if gtm_span:
+                try:
+                    gtm_data = json.loads(gtm_span.get('data-gtm4wp_product_data', '{}'))
+                    name = gtm_data.get('item_name', '')
+                    price = gtm_data.get('price')
+                    stock_status = gtm_data.get('stockstatus', '')
+                    product_link = gtm_data.get('productlink', '')
+                    in_stock = stock_status == 'instock'
+
+                    if name and len(name) >= 5:
+                        img_el = item.select_one('.card-image img')
+                        image = ''
+                        if img_el:
+                            image = (
+                                img_el.get('data-src')
+                                or img_el.get('data-lazy-src')
+                                or img_el.get('src', '')
+                            )
+
+                        products.append({
+                            'name': name,
+                            'price': float(price) if price else None,
+                            'in_stock': in_stock,
+                            'url': product_link,
+                            'image_url': image,
+                            'set_code': detect_set_code(name),
+                        })
+                        continue
+                except (json.JSONDecodeError, ValueError) as e:
+                    logger.debug(f"GTM parse error, fallback HTML: {e}")
+
+            # Strategie 2 : fallback parsing HTML
+            name_el = item.select_one('.card-title h2')
             if not name_el:
                 continue
 
@@ -394,12 +454,105 @@ def scrape_philibert(url):
             if len(name) < 5:
                 continue
 
+            # Prix dans div.card-price (texte direct, ex: "269,99 EURO")
+            price_el = item.select_one('.card-price')
+            price = None
+            if price_el:
+                # Le texte direct du div est le prix courant ;
+                # un eventuel <p> enfant est l'ancien prix barre
+                price_text = ''.join(
+                    child for child in price_el.children if isinstance(child, str)
+                ).strip()
+                if price_text:
+                    price = parse_price(price_text)
+                else:
+                    price = parse_price(price_el.get_text())
+
+            # Lien produit : le <a> direct enfant de .card-game
+            link_el = item.select_one('a[href]')
+            link = link_el.get('href', '') if link_el else ''
+
+            img_el = item.select_one('.card-image img')
+            image = ''
+            if img_el:
+                image = (
+                    img_el.get('data-src')
+                    or img_el.get('data-lazy-src')
+                    or img_el.get('src', '')
+                )
+
+            # Stock : bouton add_to_cart present = en stock ; "Rupture" dans .links = rupture
+            links_div = item.select_one('.links')
+            links_text = links_div.get_text(' ', strip=True).lower() if links_div else ''
+            add_to_cart = item.select_one('.add_to_cart_button')
+
+            if 'rupture' in links_text:
+                in_stock = False
+            elif add_to_cart:
+                in_stock = True
+            else:
+                in_stock = False
+
+            products.append({
+                'name': name, 'price': price, 'in_stock': in_stock,
+                'url': link, 'image_url': image, 'set_code': detect_set_code(name),
+            })
+        except Exception as e:
+            logger.warning(f"Erreur parsing Coin des Barons: {e}")
+
+    logger.info(f"Coin des Barons: {len(products)} produits trouves")
+    return products
+
+
+def scrape_philibert(url):
+    """Scraper pour Philibert (PrestaShop 1.6-era theme sur philibertnet.com).
+
+    Structure HTML verifiee (fevrier 2026) :
+      ul.product_list.grid
+        > li.ajax_block_product
+          > div.wrapper_product[data-product-reference]
+            > div.wrapper_product_1
+              > a.product_img_link[href] > span.ratio-container > img
+            > div.wrapper_product_2
+              > div.labels
+                > span.new-label          ("Nouveaute")
+                > span.redprice-label     ("Prix rouge")
+                > span.preorder-label     (precommande dispo)
+                > span.comingsoon-label   (a venir, pas encore dispo)
+              > p.s_title_block > a[href]  (titre du produit)
+              > p.price_container > span.price  (prix)
+            > div.wrapper_product_3
+              > a.ajax_add_to_cart_button  (disabled="disabled" si non achetable)
+              > a.lnk_view                (lien "Plus d'infos")
+
+    Le dataLayer JS contient aussi les donnees produits (impressions).
+    """
+    products = []
+    html = fetch_page(url)
+    if not html:
+        return products
+
+    soup = BeautifulSoup(html, 'html.parser')
+
+    # Strategie 1 : parsing HTML des blocs produit
+    for item in soup.select('li.ajax_block_product'):
+        try:
+            name_el = item.select_one('.s_title_block a')
+            if not name_el:
+                continue
+
+            name = name_el.get_text(strip=True)
+            if len(name) < 5:
+                continue
+
+            price_el = item.select_one('.price_container .price')
             price = parse_price(price_el.get_text() if price_el else '')
+
             link = name_el.get('href', '')
             if link and not link.startswith('http'):
                 link = f"https://www.philibertnet.com{link}"
 
-            img_el = item.select_one('img')
+            img_el = item.select_one('.product_img_link img')
             image = ''
             if img_el:
                 image = (
@@ -408,22 +561,27 @@ def scrape_philibert(url):
                     or img_el.get('src', '')
                 )
 
-            availability = item.select_one(
-                '.product-availability, .availability, [class*="availability"]'
-            )
-            out_of_stock_el = item.select_one('.out-of-stock, .unavailable')
+            # Disponibilite : on verifie le bouton d'ajout au panier
+            # et les labels de statut
+            add_btn = item.select_one('.ajax_add_to_cart_button')
+            comingsoon = item.select_one('.comingsoon-label')
+            preorder = item.select_one('.preorder-label')
 
-            if out_of_stock_el:
+            if comingsoon:
+                # "A venir" - pas encore disponible
                 in_stock = False
-            elif availability:
-                avail_text = availability.get_text(strip=True).lower()
-                in_stock = ('dispo' in avail_text or 'en stock' in avail_text
-                            or 'available' in avail_text)
+            elif add_btn and not add_btn.get('disabled'):
+                # Bouton actif = achetable maintenant
+                in_stock = True
+            elif preorder:
+                # Precommande avec "Dispo." = disponible en precommande
+                details = preorder.select_one('.details')
+                if details and 'dispo' in details.get_text(strip=True).lower():
+                    in_stock = True
+                else:
+                    in_stock = False
             else:
-                add_btn = item.select_one(
-                    '.add-to-cart, [data-button-action="add-to-cart"]'
-                )
-                in_stock = add_btn is not None and not add_btn.get('disabled')
+                in_stock = False
 
             products.append({
                 'name': name, 'price': price, 'in_stock': in_stock,
@@ -431,6 +589,41 @@ def scrape_philibert(url):
             })
         except Exception as e:
             logger.warning(f"Erreur parsing Philibert: {e}")
+
+    # Si le parsing HTML n'a rien donne, fallback sur le dataLayer JS
+    if not products:
+        logger.info("Philibert: fallback sur dataLayer JS")
+        for script in soup.find_all('script'):
+            text = script.string or ''
+            if '"impressions"' not in text:
+                continue
+            match = re.search(r'"impressions"\s*:\s*(\[.*?\])', text, re.DOTALL)
+            if not match:
+                continue
+            try:
+                impressions = json.loads(match.group(1))
+                for imp in impressions:
+                    name = imp.get('name', '')
+                    if not name or len(name) < 5:
+                        continue
+                    price_val = imp.get('price')
+                    link_slug = imp.get('link', '')
+                    product_id = imp.get('id', '')
+                    full_link = (
+                        f"https://www.philibertnet.com/fr/one-piece-le-jeu-de-cartes/"
+                        f"{product_id}-{link_slug}.html"
+                    )
+                    products.append({
+                        'name': name,
+                        'price': float(price_val) if price_val else None,
+                        'in_stock': True,  # Le dataLayer ne donne pas le stock
+                        'url': full_link,
+                        'image_url': '',
+                        'set_code': detect_set_code(name),
+                    })
+            except (json.JSONDecodeError, ValueError) as e:
+                logger.warning(f"Erreur parsing dataLayer Philibert: {e}")
+            break
 
     logger.info(f"Philibert: {len(products)} produits trouves")
     return products
@@ -513,7 +706,7 @@ def scrape_ultrajeux(url):
 SCRAPER_REGISTRY = {
     'relictcg': scrape_relictcg,
     'destocktcg': scrape_destocktcg,
-    'coindesbarons': lambda url: scrape_woocommerce(url, 'https://lecoindesbarons.com'),
+    'coindesbarons': scrape_coindesbarons,
     'philibert': scrape_philibert,
     'ultrajeux': scrape_ultrajeux,
     'guizettefamily': lambda url: scrape_woocommerce(url, 'https://www.guizettefamily.com'),
