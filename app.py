@@ -4,7 +4,7 @@ Surveillance de stock et prix de displays One Piece TCG
 sur les principaux sites e-commerce francais.
 """
 
-__version__ = '1.3.0'
+__version__ = '1.3.1'
 
 from flask import Flask, render_template, jsonify, request, g
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -159,8 +159,8 @@ def is_french_display(name):
     # Codes langue en suffixe (ex: "Display OP10 - JPN", "Display OP10 - EN")
     if re.search(r'[-\s](en|eng|jap|jpn)\s*$', name_lower):
         return False
-    # Exclure les cases de displays (cartons de 10/12 displays)
-    if 'case de' in name_lower or 'case -' in name_lower:
+    # Exclure les cases/cartons de displays (cartons de 10/12 displays)
+    if 'case de' in name_lower or 'case -' in name_lower or 'carton de' in name_lower or 'carton -' in name_lower:
         return False
     # Exclure les bundles (display + autre produit)
     if 'bundle' in name_lower or ' + ' in name_lower:
@@ -572,25 +572,17 @@ def scrape_philibert(url):
                     or img_el.get('src', '')
                 )
 
-            # Disponibilite : on verifie le bouton d'ajout au panier
-            # et les labels de statut
+            # Disponibilite : precommande et "a venir" ne sont PAS en stock
             add_btn = item.select_one('.ajax_add_to_cart_button')
             comingsoon = item.select_one('.comingsoon-label')
             preorder = item.select_one('.preorder-label')
 
-            if comingsoon:
-                # "A venir" - pas encore disponible
+            if comingsoon or preorder:
+                # "A venir" ou precommande = pas en stock
                 in_stock = False
             elif add_btn and not add_btn.get('disabled'):
-                # Bouton actif = achetable maintenant
+                # Bouton actif sans label precommande = achetable maintenant
                 in_stock = True
-            elif preorder:
-                # Precommande avec "Dispo." = disponible en precommande
-                details = preorder.select_one('.details')
-                if details and 'dispo' in details.get_text(strip=True).lower():
-                    in_stock = True
-                else:
-                    in_stock = False
             else:
                 in_stock = False
 
@@ -804,7 +796,9 @@ def scrape_cardshunter(url):
             badge = item.select_one('.elementor-button-text')
             badge_text = badge.get_text(strip=True).lower() if badge else ''
 
-            in_stock = price is not None and 'rupture' not in badge_text
+            in_stock = (price is not None
+                        and 'rupture' not in badge_text
+                        and 'commande' not in badge_text)
 
             img_el = item.select_one('.jet-listing-dynamic-image__img')
             image = ''
