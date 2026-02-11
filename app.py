@@ -149,11 +149,14 @@ def is_french_display(name):
     name_lower = name.lower()
     if 'display' not in name_lower and 'boite de 24' not in name_lower:
         return False
-    excluded = ['(en)', '(eng)', '(jap)', '(jpn)', 'english', 'japanese',
-                'japonais', 'anglais']
+    excluded = ['(en)', '(eng)', '(jap)', '(jpn)', '- en', '- eng',
+                '- jap', '- jpn', ' en ', ' eng ', ' jap ', ' jpn ',
+                'english', 'japanese', 'japonais', 'anglais']
     for ex in excluded:
         if ex in name_lower:
             return False
+    if name_lower.endswith(' en') or name_lower.endswith(' jpn'):
+        return False
     return True
 
 
