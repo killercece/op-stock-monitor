@@ -955,8 +955,8 @@ def run_scan():
             displays = [p for p in site_products if is_french_display(p['name'])]
             logger.info(f"  {len(displays)}/{len(site_products)} sont des displays FR")
 
-            # Marquer le debut du scan pour ce site (pour le nettoyage)
-            scan_start = datetime.now().isoformat()
+            # Marquer le debut du scan pour ce site (format SQLite pour comparaison)
+            scan_start = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
 
             saved = 0
             for product in displays:
