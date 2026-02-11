@@ -63,6 +63,15 @@ INITIAL_SITES = [
         ]),
         'enabled': 1,
     },
+    {
+        'name': "L'Antre des Temps",
+        'slug': 'antretemps',
+        'url': 'https://www.antretemps.com',
+        'search_urls': json.dumps([
+            'https://www.antretemps.com/jeux-de-cartes/one-piece-c899.html',
+        ]),
+        'enabled': 1,
+    },
 ]
 
 

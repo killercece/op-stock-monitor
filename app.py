@@ -699,6 +699,61 @@ def scrape_ultrajeux(url):
     return products
 
 
+def scrape_antretemps(url):
+    """Scraper pour L'Antre des Temps (CMS custom, antretemps.com).
+
+    Structure HTML verifiee (fevrier 2026) :
+      div.product_box
+        > div.boite_produit1
+          > div.bp.bp_content[idproduit]
+            > div.bp_image > a > div.imageGabarit > div.pictureContainer > img[data-lazy]
+          > div.bp_footer
+            > h3.bp_designation > a[href]  (nom + lien)
+            > div.bp_stock > span.articleDispo > a  (texte stock)
+            > div.bp_prix                           (texte prix, ex: "18,90 euro")
+    """
+    products = []
+    html = fetch_page(url)
+    if not html:
+        return products
+
+    soup = BeautifulSoup(html, 'html.parser')
+
+    for box in soup.select('div.product_box'):
+        try:
+            name_el = box.select_one('h3.bp_designation a')
+            if not name_el:
+                continue
+
+            name = name_el.get_text(strip=True)
+            if not name or len(name) < 5:
+                continue
+
+            link = name_el.get('href', '')
+
+            price_el = box.select_one('.bp_prix')
+            price = parse_price(price_el.get_text(strip=True)) if price_el else None
+
+            stock_el = box.select_one('.bp_stock')
+            stock_text = stock_el.get_text(strip=True).lower() if stock_el else ''
+            in_stock = 'en stock' in stock_text or 'disponible' in stock_text
+
+            img_el = box.select_one('img[data-lazy]')
+            image = ''
+            if img_el:
+                image = img_el.get('data-lazy', '')
+
+            products.append({
+                'name': name, 'price': price, 'in_stock': in_stock,
+                'url': link, 'image_url': image, 'set_code': detect_set_code(name),
+            })
+        except Exception as e:
+            logger.warning(f"Erreur parsing Antre Temps: {e}")
+
+    logger.info(f"Antre Temps: {len(products)} produits trouves")
+    return products
+
+
 # Registre des scrapers : slug -> fonction
 SCRAPER_REGISTRY = {
     'relictcg': scrape_relictcg,
@@ -707,6 +762,7 @@ SCRAPER_REGISTRY = {
     'philibert': scrape_philibert,
     'ultrajeux': scrape_ultrajeux,
     'guizettefamily': lambda url: scrape_woocommerce(url, 'https://www.guizettefamily.com'),
+    'antretemps': scrape_antretemps,
 }
 
 
